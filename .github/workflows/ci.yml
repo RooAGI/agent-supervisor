@@ -1,0 +1,29 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fmt --check
+      - run: cargo test --all-targets -- --test-threads=1
+      - name: Run platform network integration test
+        if: runner.os == 'Windows'
+        run: cargo test --test windows_filesystem -- --test-threads=1
+      - name: Run platform network integration test
+        if: runner.os == 'macOS'
+        run: cargo test --test macos_filesystem -- --test-threads=1
+      - name: Run platform network integration test
+        if: runner.os == 'Linux'
+        run: cargo test --test linux_filesystem -- --test-threads=1
+      - run: cargo check --all-targets
+      - run: cargo clippy --all-targets -- -D warnings
