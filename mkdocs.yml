@@ -1,0 +1,78 @@
+site_name: RooAGI Sandbox
+site_description: Policy-driven process isolation and supervision for agent runtimes.
+site_url: https://rooagidev.github.io/rooagi-sandbox/
+repo_url: https://github.com/rooagidev/rooagi-sandbox
+repo_name: rooagidev/rooagi-sandbox
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  language: en
+  font:
+    text: Inter
+    code: JetBrains Mono
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - content.action.edit
+    - search.suggest
+    - search.highlight
+
+nav:
+  - Home: index.md
+  - Get started:
+      - Quickstart: quickstart.md
+      - API boundaries: api-boundaries.md
+  - Security:
+      - Security model: security-model.md
+      - Filesystem and network: network-host-mode.md
+  - Operations:
+      - Supervisor lifecycle: supervisor-lifecycle.md
+      - Process groups and resources: process-groups.md
+  - Releases:
+      - 0.1.0: releases/0.1.0.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+extra_css:
+  - stylesheets/extra.css
+
+extra:
+  generator: false
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/rooagidev/rooagi-sandbox
+      name: RooAGI Sandbox on GitHub
+
+copyright: Apache-2.0 licensed · Built by <a href="https://www.rooagi.com">RooAGI</a>
