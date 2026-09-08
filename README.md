@@ -1,6 +1,8 @@
 # RooAGI Sandbox
 
-RooAGI Sandbox is the process boundary for agent runtimes: a native,
+RELIABLE PROCESS CONTROL FOR AI AGENTS
+
+RooAGI Sandbox is the process boundary your agent runtime can trust: a native,
 policy-driven supervisor for tools, MCP servers, subprocesses, PTY sessions,
 and pipelines.
 
@@ -10,6 +12,22 @@ system enforcement and process lifecycle; the agent runtime remains responsible
 for identity, authentication, authorization, and orchestration.
 
 The current release is **0.1.0**.
+
+## Built for every agent builder
+
+RooAGI Sandbox is for teams building:
+
+- agent frameworks that need one process boundary across operating systems;
+- MCP servers and tool adapters that must be bounded and cleaned up reliably;
+- enterprise agent platforms that need lifecycle events, resource controls,
+  and inspectable process identity;
+- security-sensitive runtimes that require explicit filesystem and environment
+  policy; and
+- desktop and CLI agents that need cancellation, PTY sessions, and process-tree
+  cleanup.
+
+Use the same execution contract whether an agent runs one short-lived tool,
+keeps an MCP server alive, or coordinates a multi-process pipeline.
 
 ## The problem it solves
 
@@ -22,6 +40,19 @@ into an operating-system integration.
 RooAGI Sandbox provides that boundary. It makes execution policy explicit,
 keeps process ownership with a supervisor, and returns structured receipts and
 errors that an agent runtime can record or act on.
+
+## What reliable execution means
+
+An agent should not have to choose between speed and control. The sandbox
+combines native operating-system enforcement with predictable process
+semantics:
+
+- start only the executable and environment the runtime authorized;
+- limit input, output, time, memory, process count, and CPU where supported;
+- preserve host networking explicitly when tools need normal connectivity;
+- expose liveness, identity, lifecycle, and resource information; and
+- finish with a bounded shutdown and a structured result, even after
+  cancellation or failure.
 
 ## Why use it?
 
