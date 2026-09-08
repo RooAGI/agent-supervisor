@@ -2,7 +2,7 @@
 name = "rooagi-sandbox"
 version = "0.1.0"
 edition = "2021"
-license = "MIT OR LicenseRef-RooAGI-Commercial"
+license = "Apache-2.0"
 description = "Policy-driven process isolation and supervision for RooAGI runtimes"
 
 [dependencies]

@@ -4,14 +4,9 @@ Policy-driven process isolation and supervision for RooAGI runtimes.
 
 ## Licensing
 
-This project is dual-licensed:
-
-- under the [MIT License](LICENSE-MIT); or
-- under a separate commercial license available from RooAGI.
-
-Unless you have a separate commercial license agreement with RooAGI, your
-use of this project is governed by the MIT License. The commercial licensing
-notice is included in [LICENSE-COMMERCIAL.md](LICENSE-COMMERCIAL.md).
+This project is licensed under the [Apache License, Version 2.0](LICENSE).
+You may use, modify, and distribute it, including in commercial agent
+products, subject to the terms of that license.
 
 This crate accepts already-authorized execution requests. It does not read
 graph configuration, resolve authentication, or grant capabilities. Ambient
