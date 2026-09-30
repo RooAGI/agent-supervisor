@@ -579,6 +579,7 @@ fn spawn_windows_internal(
         request.working_directory.as_deref(),
         &request.policy.environment,
         request
+            .policy
             .filesystem
             .as_ref()
             .expect("validated filesystem policy"),
@@ -729,6 +730,7 @@ fn spawn_windows_group_child(
         request.working_directory.as_deref(),
         &request.policy.environment,
         request
+            .policy
             .filesystem
             .as_ref()
             .expect("validated filesystem policy"),
