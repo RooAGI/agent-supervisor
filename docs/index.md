@@ -1,70 +1,72 @@
-# RooAGI Agent Sandbox
+---
+hide:
+  - navigation
+  - toc
+---
 
-## Reliable process control for AI agents
+<div class="landing">
+  <section class="landing-hero">
+    <div class="landing-hero__copy">
+      <p class="eyebrow"><span class="eyebrow__dot"></span> ROOAGI · AGENT SANDBOX</p>
+      <h1>A reliable process boundary for AI agents.</h1>
+      <p class="landing-hero__lede">Your runtime decides what an agent may run. Agent Sandbox supervises how it runs: with explicit policy, native operating-system controls, and cleanup you can count on.</p>
+      <div class="landing-hero__actions">
+        <a class="md-button md-button--primary" href="quickstart/">Get started</a>
+        <a class="md-button" href="https://github.com/RooAGI/AgentSandbox">Explore on GitHub <span aria-hidden="true">↗</span></a>
+      </div>
+      <div class="landing-hero__meta"><span>OPEN SOURCE</span><span>RUST</span><span>APACHE 2.0</span></div>
+    </div>
 
-The process boundary your agent runtime can trust.
+    <div class="execution-visual" aria-label="An approved execution request passes through Agent Sandbox and becomes a supervised child process">
+      <div class="execution-visual__top"><span><i></i><i></i><i></i></span><span>EXECUTION FLOW</span><span>01 — 04</span></div>
+      <div class="execution-flow">
+        <div class="flow-node flow-node--runtime"><span class="flow-node__icon">01</span><div><small>YOUR RUNTIME</small><strong>Authorization</strong></div><b>✓</b></div>
+        <div class="flow-link"><span>explicit request</span></div>
+        <div class="flow-node flow-node--sandbox"><span class="flow-node__icon">02</span><div><small>AGENT SANDBOX</small><strong>Policy + supervision</strong></div><b>●</b></div>
+        <div class="flow-controls"><span>TIME</span><span>OUTPUT</span><span>FILESYSTEM</span><span>RESOURCES</span></div>
+        <div class="flow-link"><span>bounded process</span></div>
+        <div class="flow-node flow-node--child"><span class="flow-node__icon">03</span><div><small>CHILD PROCESS</small><strong>Tool, MCP server, pipeline</strong></div><b>↗</b></div>
+      </div>
+      <div class="execution-visual__foot"><span><i></i> SUPERVISED</span><code>cancel → stop → collect result</code></div>
+    </div>
+  </section>
 
-`agent-sandbox` gives agent builders a native, policy-driven boundary for
-running tools, MCP servers, subprocesses, and pipelines.
+  <section class="capability-ribbon" aria-label="Project highlights">
+    <div><strong>One Rust API</strong><span>for agent runtimes</span></div>
+    <div><strong>Linux · macOS · Windows</strong><span>native platform backends</span></div>
+    <div><strong>Explicit policy</strong><span>no inferred authority</span></div>
+    <div><strong>Predictable cleanup</strong><span>from cancel to result</span></div>
+  </section>
 
-It turns an already-authorized execution request into a supervised process:
+  <section class="landing-section">
+    <div class="section-heading">
+      <p class="eyebrow">CONTROL THE EXECUTION</p>
+      <h2>Contain the work.<br><span>Keep authority with your runtime.</span></h2>
+      <p>The sandbox takes a request your application has already authorized and gives it a managed lifecycle. Your runtime keeps credentials, identity, and tool policy.</p>
+    </div>
+    <div class="feature-grid">
+      <article><span class="feature-number">01 / BOUND</span><h3>Set limits before launch</h3><p>Choose the executable, environment, filesystem grants, network mode, deadlines, input, output, and resource limits for each request.</p><a href="quickstart/">Build an execution request <span aria-hidden="true">→</span></a></article>
+      <article><span class="feature-number">02 / ENFORCE</span><h3>Use native controls</h3><p>Apply operating-system isolation where supported, and report when a requested enforcement mode is unavailable.</p><a href="security-model/">Read the security model <span aria-hidden="true">→</span></a></article>
+      <article><span class="feature-number">03 / SUPERVISE</span><h3>Finish cleanly</h3><p>Track process identity and lifecycle, support cancellation, and move from graceful shutdown to bounded forced cleanup.</p><a href="supervisor-lifecycle/">Explore supervision <span aria-hidden="true">→</span></a></article>
+    </div>
+  </section>
 
-```text
-agent runtime → ExecutionRequest → agent-sandbox → child process
-```
+  <section class="workflow-section">
+    <div class="workflow-copy"><p class="eyebrow">A CLEAR CONTRACT</p><h2>From authorized request to structured result.</h2><p>Execution stays legible to the system that owns the agent. The caller declares the policy; Agent Sandbox enforces and supervises the process; the runtime receives the outcome.</p><a class="text-link" href="api-boundaries/">Understand the API boundary <span aria-hidden="true">→</span></a></div>
+    <div class="workflow-steps" role="list" aria-label="Execution lifecycle">
+      <div role="listitem"><span>01</span><strong>Declare</strong><small>Executable · policy · limits</small></div>
+      <div role="listitem"><span>02</span><strong>Launch</strong><small>Platform backend applies controls</small></div>
+      <div role="listitem"><span>03</span><strong>Supervise</strong><small>Events · cancellation · cleanup</small></div>
+      <div role="listitem"><span>04</span><strong>Return</strong><small>Output · status · receipt</small></div>
+    </div>
+  </section>
 
-The sandbox owns process containment and cleanup. The runtime remains
-responsible for authorization, credentials, graph identity, and tool policy.
+  <section class="platform-section">
+    <div><p class="eyebrow">BUILT FOR AGENT WORKFLOWS</p><h2>One contract across the tools agents depend on.</h2><p>Run a short-lived tool, keep an MCP server alive, or coordinate a multi-process pipeline through a consistent execution API.</p></div>
+    <div class="platform-list"><div><span>01</span><strong>Tool adapters</strong><small>Bound commands, inputs, and output</small></div><div><span>02</span><strong>MCP servers</strong><small>Manage long-lived child processes</small></div><div><span>03</span><strong>Agent platforms</strong><small>Inspect identity, events, and resources</small></div><div><span>04</span><strong>Desktop and CLI agents</strong><small>Support PTYs, cancellation, and cleanup</small></div></div>
+  </section>
 
-## Built for every agent builder
+  <aside class="boundary-note"><span class="boundary-note__mark">i</span><div><strong>A process sandbox, with a clear security boundary.</strong><p>Agent Sandbox is not a complete container runtime. The caller must authenticate and authorize each request. Read the <a href="security-model/">security model</a> before relying on an enforcement feature.</p></div></aside>
 
-RooAGI Agent Sandbox is for teams building:
-
-- agent frameworks that need one process boundary across operating systems;
-- MCP servers and tool adapters that must be bounded and cleaned up reliably;
-- enterprise agent platforms that need lifecycle events, resource controls,
-  and inspectable process identity;
-- security-sensitive runtimes that require explicit filesystem and environment
-  policy; and
-- desktop and CLI agents that need cancellation, PTY sessions, and process-tree
-  cleanup.
-
-Use the same execution contract whether an agent runs one short-lived tool,
-keeps an MCP server alive, or coordinates a multi-process pipeline.
-
-## What reliable execution means
-
-An agent should not have to choose between speed and control. The sandbox
-combines native operating-system enforcement with predictable process
-semantics:
-
-1. Start only the executable and environment the runtime authorized.
-2. Limit input, output, time, memory, process count, and CPU where supported.
-3. Preserve host networking explicitly when tools need normal connectivity.
-4. Expose liveness, identity, lifecycle, and resource information.
-5. Finish with bounded shutdown and a structured result after cancellation or
-   failure.
-
-## Why use it?
-
-- bounded stdout, stderr, stdin, deadlines, and cancellation;
-- graceful shutdown followed by forced cleanup;
-- process groups, adoption, introspection, lifecycle events, and statistics;
-- Linux cgroup and Landlock support;
-- Windows Job Object and AppContainer support;
-- macOS filesystem isolation through the native Seatbelt launcher;
-- explicit host-network behavior and fail-closed unsupported modes; and
-- one provider-neutral Rust API for runtimes and MCP transports.
-
-## Start here
-
-1. Follow the [quickstart](quickstart.md).
-2. Read the [security model](security-model.md).
-3. Review the [API boundaries](api-boundaries.md) before integrating it into
-   an agent runtime.
-4. See the [0.1.0 release notes](releases/0.1.0.md) for the supported scope.
-
-## Release status
-
-The current release is **0.1.0**. The crate is Apache-2.0 licensed and is
-intended to be embedded in open-source and commercial agent products.
+  <section class="final-cta"><p class="eyebrow">AGENT SANDBOX · 0.1.0</p><h2>Make every tool run easier to trust.</h2><p>Start with the Rust quickstart, then choose the controls your runtime needs.</p><div><a class="md-button md-button--primary" href="quickstart/">Read the quickstart</a><a class="text-link" href="releases/0.1.0/">Review release scope <span aria-hidden="true">→</span></a></div></section>
+</div>
