@@ -16,6 +16,8 @@ from agent_supervisor import (
 
 
 def py_command(code, **kwargs):
+    if os.name == "nt":
+        kwargs.setdefault("inherit_env", ["SystemRoot", "WINDIR"])
     return Command(argv=[sys.executable, "-c", code], **kwargs)
 
 

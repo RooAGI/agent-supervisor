@@ -2,7 +2,7 @@
 
 use agent_supervisor::{
     execute, EnforcementRequirement, EnvironmentPolicy, ExecutionRequest, FilesystemAccess,
-    FilesystemGrant, FilesystemPolicy, ResourceLimits,
+    FilesystemGrant, FilesystemPolicy,
 };
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -16,6 +16,7 @@ fn request(args: Vec<String>, policy: FilesystemPolicy) -> ExecutionRequest {
     ExecutionRequest {
         executable: PathBuf::from(windir).join("System32").join("cmd.exe"),
         args,
+        working_directory: None,
         policy: agent_supervisor::SandboxPolicy {
             environment: EnvironmentPolicy {
                 inherit: ["SystemRoot", "ComSpec"]
@@ -25,7 +26,6 @@ fn request(args: Vec<String>, policy: FilesystemPolicy) -> ExecutionRequest {
                 variables: BTreeMap::new(),
                 executable_search_paths: Vec::new(),
             },
-            working_directory: None,
             filesystem: Some(policy),
             enforcement: EnforcementRequirement::Required,
             ..agent_supervisor::SandboxPolicy::default()

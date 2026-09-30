@@ -1,8 +1,7 @@
 #![cfg(windows)]
 
 use agent_supervisor::{
-    EnforcementRequirement, EnvironmentPolicy, ExecutionRequest, ProcessGroup, PtyDimensions,
-    PtySession, ResourceLimits,
+    EnforcementRequirement, ExecutionRequest, ProcessGroup, PtyDimensions, PtySession,
 };
 use std::path::PathBuf;
 
@@ -80,7 +79,7 @@ fn conpty_session_is_contained_and_reaped() {
 #[tokio::test]
 async fn job_object_applies_cpu_quota() {
     let mut request = command(&["exit", "0"]);
-    request.limits.cpu_quota_micros = Some(50_000);
+    request.policy.limits.cpu_quota_micros = Some(50_000);
     let group = ProcessGroup::new().unwrap();
     let child = group.start(&request).unwrap();
     let receipt = child.wait().await.unwrap();
