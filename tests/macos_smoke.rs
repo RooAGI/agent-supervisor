@@ -1,8 +1,6 @@
 #![cfg(target_os = "macos")]
 
-use agent_supervisor::{
-    EnforcementRequirement, EnvironmentPolicy, ExecutionRequest, ProcessGroup, ResourceLimits,
-};
+use agent_supervisor::{ExecutionRequest, ProcessGroup};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::time::Duration;

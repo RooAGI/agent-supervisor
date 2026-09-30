@@ -43,7 +43,9 @@ pub fn apply_environment_policy(
     Ok(())
 }
 
-pub(crate) fn validate_environment_policy(policy: &EnvironmentPolicy) -> Result<(), SandboxError> {
+/// Validates environment variable names and executable search paths without
+/// starting a process.
+pub fn validate_environment_policy(policy: &EnvironmentPolicy) -> Result<(), SandboxError> {
     for name in policy.inherit.iter().chain(policy.variables.keys()) {
         validate_environment_name(name)?;
     }

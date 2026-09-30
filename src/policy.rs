@@ -175,7 +175,10 @@ pub struct ExecutionRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ExecutableIdentity {
     pub requested_path: PathBuf,
-    pub canonical_path: PathBuf,
+    /// Resolved canonical path when the backend can verify it. Remote
+    /// execution backends may not expose the path resolved inside the sandbox.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

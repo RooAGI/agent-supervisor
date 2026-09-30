@@ -20,7 +20,7 @@ mod supervisor;
 #[cfg(windows)]
 mod windows_filesystem;
 
-pub use environment::{apply_environment_policy, EnvironmentPolicy};
+pub use environment::{apply_environment_policy, validate_environment_policy, EnvironmentPolicy};
 pub use error::{SandboxError, SandboxErrorCode, SandboxPhase};
 pub use events::{ProcessEvent, ProcessEventStream};
 pub use filesystem::{FilesystemAccess, FilesystemGrant, FilesystemPolicy};

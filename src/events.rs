@@ -240,9 +240,7 @@ fn spawn_reader(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use crate::{
-        spawn, EnforcementRequirement, EnvironmentPolicy, ExecutionRequest, ResourceLimits,
-    };
+    use crate::{spawn, ExecutionRequest};
     use std::path::PathBuf;
 
     #[cfg(unix)]

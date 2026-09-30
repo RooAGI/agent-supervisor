@@ -1,8 +1,8 @@
 #![cfg(target_os = "macos")]
 
 use agent_supervisor::{
-    execute, EnforcementRequirement, EnvironmentPolicy, ExecutionRequest, FilesystemAccess,
-    FilesystemGrant, FilesystemPolicy, ResourceLimits,
+    execute, EnvironmentPolicy, ExecutionRequest, FilesystemAccess, FilesystemGrant,
+    FilesystemPolicy,
 };
 use std::fs;
 use std::io::Write;

@@ -1,9 +1,13 @@
 [package]
 name = "agent-supervisor"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "Apache-2.0"
 description = "Policy-driven process isolation and supervision for RooAGI runtimes"
+documentation = "https://rooagi.github.io/agent-supervisor/"
+homepage = "https://rooagi.github.io/agent-supervisor/"
+repository = "https://github.com/RooAGI/agent-supervisor"
+exclude = ["dev/**"]
 
 [dependencies]
 futures = "0.3"

@@ -241,10 +241,7 @@ where
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use crate::{
-        EnforcementRequirement, EnvironmentPolicy, PipelineFailureKind, ResourceLimits,
-        TerminationReason,
-    };
+    use crate::{PipelineFailureKind, TerminationReason};
     use std::path::PathBuf;
 
     fn request(executable: &str, args: &[&str]) -> ExecutionRequest {

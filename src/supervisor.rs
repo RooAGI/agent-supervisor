@@ -471,7 +471,12 @@ fn spawn_internal(
     if request.policy.filesystem.is_some() {
         return spawn_windows_internal(request, supervisor, identity);
     }
-    let mut command = Command::new(&identity.canonical_path);
+    let mut command = Command::new(
+        identity
+            .canonical_path
+            .as_ref()
+            .expect("native path resolved"),
+    );
     command.args(&request.args);
     if let Some(policy) = &request.policy.filesystem {
         crate::filesystem::wrap_command(&mut command, policy, request.policy.network)
@@ -566,7 +571,10 @@ fn spawn_windows_internal(
         .apply_limits(&request.policy.limits)
         .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
     let mut child = crate::windows_filesystem::WindowsChild::spawn(
-        &identity.canonical_path,
+        identity
+            .canonical_path
+            .as_ref()
+            .expect("native path resolved"),
         &request.args,
         request.working_directory.as_deref(),
         &request.policy.environment,
@@ -629,7 +637,12 @@ pub(crate) fn spawn_group_child(
         .apply_limits(&request.policy.limits)
         .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
 
-    let mut command = Command::new(&identity.canonical_path);
+    let mut command = Command::new(
+        identity
+            .canonical_path
+            .as_ref()
+            .expect("native path resolved"),
+    );
     command.args(&request.args);
     if let Some(policy) = &request.policy.filesystem {
         crate::filesystem::wrap_command(&mut command, policy, request.policy.network)
@@ -708,7 +721,10 @@ fn spawn_windows_group_child(
         .apply_limits(&request.policy.limits)
         .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
     let mut child = crate::windows_filesystem::WindowsChild::spawn(
-        &identity.canonical_path,
+        identity
+            .canonical_path
+            .as_ref()
+            .expect("native path resolved"),
         &request.args,
         request.working_directory.as_deref(),
         &request.policy.environment,
@@ -766,7 +782,12 @@ pub async fn execute_with_cancellation(
     if request.policy.filesystem.is_some() {
         return execute_windows_with_cancellation(request, input, cancellation, identity).await;
     }
-    let mut command = Command::new(&identity.canonical_path);
+    let mut command = Command::new(
+        identity
+            .canonical_path
+            .as_ref()
+            .expect("native path resolved"),
+    );
     command.args(&request.args);
     if let Some(policy) = &request.policy.filesystem {
         crate::filesystem::wrap_command(&mut command, policy, request.policy.network)
@@ -1071,7 +1092,7 @@ pub(crate) fn validate_request(
     }
     Ok(ExecutableIdentity {
         requested_path: request.executable.clone(),
-        canonical_path,
+        canonical_path: Some(canonical_path),
     })
 }
 
@@ -1173,9 +1194,7 @@ fn exit_reason(status: &ChildStatus) -> TerminationReason {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use crate::{EnvironmentPolicy, ResourceLimits};
     use std::collections::BTreeMap;
-    use std::ffi::OsString;
     use std::path::PathBuf;
 
     fn request(executable: &str) -> ExecutionRequest {
@@ -1269,7 +1288,11 @@ mod tests {
             receipt.termination,
             TerminationReason::Exited { code: Some(0), .. }
         ));
-        assert!(receipt.executable.canonical_path.is_absolute());
+        assert!(receipt
+            .executable
+            .canonical_path
+            .as_ref()
+            .is_some_and(|path| path.is_absolute()));
     }
 
     #[tokio::test]
@@ -1406,7 +1429,7 @@ mod tests {
                         container,
                         ExecutableIdentity {
                             requested_path: "test".into(),
-                            canonical_path: "test".into(),
+                            canonical_path: Some("test".into()),
                         },
                     );
                 });

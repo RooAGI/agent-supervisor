@@ -59,7 +59,7 @@ mod tests {
                     enforcement: Enforcement::Trusted,
                     executable: ExecutableIdentity {
                         requested_path: executable.clone(),
-                        canonical_path: executable,
+                        canonical_path: Some(executable),
                     },
                     termination: TerminationReason::Exited {
                         code: Some(0),

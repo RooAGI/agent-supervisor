@@ -85,7 +85,12 @@ impl PtySession {
             .openpty(to_pty_size(dimensions))
             .map_err(|error| SandboxError::spawn(std::io::Error::other(error.to_string())))?;
 
-        let mut command = CommandBuilder::new(&identity.canonical_path);
+        let mut command = CommandBuilder::new(
+            identity
+                .canonical_path
+                .as_ref()
+                .expect("native path resolved"),
+        );
         command.args(&request.args);
         command.env_clear();
         for name in &request.policy.environment.inherit {
@@ -107,7 +112,7 @@ impl PtySession {
             SandboxError::spawn(std::io::Error::other("PTY child PID unavailable"))
         })?;
         #[cfg(target_os = "linux")]
-        let expected_executable = Some(identity.canonical_path.as_path());
+        let expected_executable = identity.canonical_path.as_deref();
         #[cfg(all(unix, not(target_os = "linux")))]
         let expected_executable = None;
         #[cfg(unix)]
@@ -214,7 +219,6 @@ impl Drop for PtySession {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use crate::{EnforcementRequirement, EnvironmentPolicy, ResourceLimits};
     use std::path::PathBuf;
 
     #[test]

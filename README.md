@@ -1,60 +1,65 @@
 # RooAGI Agent Supervisor
 
-RELIABLE PROCESS CONTROL FOR AI AGENTS
+CONTROL EVERY TOOL PROCESS YOUR APPLICATION STARTS
 
-RooAGI Agent Supervisor is the process boundary your agent runtime can trust: a native,
-policy-driven supervisor for tools, MCP servers, subprocesses, PTY sessions,
-and pipelines.
+RooAGI Agent Supervisor gives your application control over every tool process
+it starts: bound its output, cancel it, clean up its children, and record how
+it finished. It is a Rust library for supervising commands, persistent
+subprocesses such as MCP servers, PTY sessions, and pipelines across Linux,
+macOS, and Windows.
 
-It accepts an already-authorized execution request and turns it into a bounded,
-observable, and cleanly supervised process. The sandbox handles operating
-system enforcement and process lifecycle; the agent runtime remains responsible
-for identity, authentication, authorization, and orchestration.
+Tool calls do not always end when their caller times out. A command can keep
+running, leave child processes behind, or flood an application's output
+buffers. Agent Supervisor brings deadlines, output limits, cancellation,
+process-tree cleanup, and structured termination results into one library, so
+you do not have to rebuild those behaviors around each subprocess API.
 
-The current release is **0.1.0**.
+Your application decides what may run and supplies an authorized request.
+Agent Supervisor owns native process execution and lifecycle management; your
+application remains responsible for identity, authentication, authorization,
+and orchestration. Enforcement depends on the operating system and selected
+policy; inspect the execution result and platform capabilities.
 
-## Built for every agent builder
+The current release is **0.1.1**.
 
-RooAGI Agent Supervisor is for teams building:
+## Who it is for
 
-- agent frameworks that need one process boundary across operating systems;
-- MCP servers and tool adapters that must be bounded and cleaned up reliably;
-- enterprise agent platforms that need lifecycle events, resource controls,
-  and inspectable process identity;
-- security-sensitive runtimes that require explicit filesystem and environment
-  policy; and
-- desktop and CLI agents that need cancellation, PTY sessions, and process-tree
-  cleanup.
+Agent Supervisor is especially useful for:
 
-Use the same execution contract whether an agent runs one short-lived tool,
-keeps an MCP server alive, or coordinates a multi-process pipeline.
+- **Rust desktop and CLI applications** that embed process control and need
+  dependable cancellation, bounded output, and child cleanup;
+- **Agent framework developers** who want consistent execution and cleanup
+  behavior across tool adapters; and
+- **Developers managing MCP servers and other persistent subprocesses** who
+  need startup, readiness, shutdown, process groups, and lifecycle events.
+
+Instead of writing bespoke wrappers around operating-system subprocess APIs,
+you can use one library for short-lived tool commands, long-running processes,
+and multi-process pipelines.
 
 ## The problem it solves
 
-Agent runtimes launch processes that may outlive a single tool call, create
-child processes, consume unbounded output, inherit unsafe environment values,
-or fail to clean up after cancellation. A runtime needs one consistent process
-boundary across Linux, macOS, and Windows without turning every tool adapter
-into an operating-system integration.
+Applications launch processes that may outlive a single tool call, create
+children, consume unbounded output, or survive cancellation. Each tool adapter
+can end up reimplementing deadlines, output collection, process-tree cleanup,
+and platform-specific behavior.
 
-RooAGI Agent Supervisor provides that boundary. It makes execution policy explicit,
-keeps process ownership with a supervisor, and returns structured receipts and
-errors that an agent runtime can record or act on.
+RooAGI Agent Supervisor centralizes those responsibilities. It makes execution
+policy explicit, supervises process ownership and lifecycle, and returns
+structured results and errors that your application can record or act on.
 
 ## What reliable execution means
 
-An agent should not have to choose between speed and control. The sandbox
-combines native operating-system enforcement with predictable process
-semantics:
+For each execution, the library provides a consistent control surface:
 
 - start only the executable and environment the runtime authorized;
 - limit input, output, time, memory, process count, and CPU where supported;
 - preserve host networking explicitly when tools need normal connectivity;
 - expose liveness, identity, lifecycle, and resource information; and
-- finish with a bounded shutdown and a structured result, even after
-  cancellation or failure.
+- finish with a structured termination result, including after cancellation
+  or failure.
 
-## Why use it?
+## Process control in one library
 
 - Run tools and MCP servers with bounded input, output, deadlines, and
   cancellation.
@@ -114,14 +119,24 @@ The supervisor supports:
 Inspect `platform_capabilities()` before requiring optional behavior. Select
 `EnforcementRequirement::Required` when degraded enforcement is unacceptable.
 
+## OpenShell developer adapter
+
+The OpenShell adapter is a developer preview under `dev/openshell-adapter/`,
+outside the published `agent-supervisor` crate. It depends on NVIDIA's Git-only
+Rust SDK and can be built from a checkout of this repository. The adapter
+bounds collected output and rejects policy requirements that the remote API
+cannot apply or verify. Read the [OpenShell adapter contract](docs/openshell.md)
+before experimenting with it.
+
 ## Quickstart
 
 Add the crate:
 
 ```toml
 [dependencies]
-agent-supervisor = "0.1.0"
+agent-supervisor = "0.1.1"
 ```
+
 
 Create an explicit request and execute it:
 
@@ -208,7 +223,7 @@ behavior, and release notes:
 ## Release
 
 See the [0.1.0 release notes](docs/releases/0.1.0.md) for the initial public
-scope, compatibility notes, and platform limitations.
+scope, and the [0.1.1 release notes](docs/releases/0.1.1.md) for the separate OpenShell developer adapter and its behavior limits.
 
 ## License
 
