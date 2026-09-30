@@ -7,6 +7,9 @@ pub enum SandboxErrorCode {
     OutputTooLarge,
     StderrTooLarge,
     RelativeExecutable,
+    RelativeWorkingDirectory,
+    InvalidWorkingDirectory,
+    WorkingDirectoryNotGranted,
     InvalidExecutable,
     RelativeSearchPath,
     InvalidSearchPath,
@@ -16,6 +19,8 @@ pub enum SandboxErrorCode {
     SpawnFailed,
     StdinFailed,
     ExecutionFailed,
+    StdoutReadFailed,
+    StderrReadFailed,
     TimedOut,
     Unsupported,
 }
@@ -27,6 +32,9 @@ impl SandboxErrorCode {
             Self::OutputTooLarge => "output_too_large",
             Self::StderrTooLarge => "stderr_too_large",
             Self::RelativeExecutable => "relative_executable",
+            Self::RelativeWorkingDirectory => "relative_working_directory",
+            Self::InvalidWorkingDirectory => "invalid_working_directory",
+            Self::WorkingDirectoryNotGranted => "working_directory_not_granted",
             Self::InvalidExecutable => "invalid_executable",
             Self::RelativeSearchPath => "relative_search_path",
             Self::InvalidSearchPath => "invalid_search_path",
@@ -36,6 +44,8 @@ impl SandboxErrorCode {
             Self::SpawnFailed => "spawn_failed",
             Self::StdinFailed => "stdin_failed",
             Self::ExecutionFailed => "execution_failed",
+            Self::StdoutReadFailed => "stdout_read_failed",
+            Self::StderrReadFailed => "stderr_read_failed",
             Self::TimedOut => "timed_out",
             Self::Unsupported => "unsupported",
         }
@@ -171,6 +181,31 @@ impl SandboxError {
             "an executable search path must be absolute",
         )
     }
+
+    pub fn relative_working_directory() -> Self {
+        Self::new(
+            SandboxErrorCode::RelativeWorkingDirectory,
+            SandboxPhase::Validate,
+            "the working directory path must be absolute",
+        )
+    }
+
+    pub fn invalid_working_directory(source: std::io::Error) -> Self {
+        Self::with_source(
+            SandboxErrorCode::InvalidWorkingDirectory,
+            SandboxPhase::Validate,
+            "the working directory could not be resolved",
+            source,
+        )
+    }
+
+    pub fn working_directory_not_granted() -> Self {
+        Self::new(
+            SandboxErrorCode::WorkingDirectoryNotGranted,
+            SandboxPhase::Validate,
+            "the working directory is outside the filesystem grants",
+        )
+    }
     pub fn invalid_search_path() -> Self {
         Self::new(
             SandboxErrorCode::InvalidSearchPath,
@@ -221,6 +256,24 @@ impl SandboxError {
             SandboxErrorCode::ExecutionFailed,
             SandboxPhase::Wait,
             "sandboxed process execution failed",
+            source,
+        )
+    }
+
+    pub fn stdout_read(source: std::io::Error) -> Self {
+        Self::with_source(
+            SandboxErrorCode::StdoutReadFailed,
+            SandboxPhase::Stdout,
+            "failed to read sandboxed process stdout",
+            source,
+        )
+    }
+
+    pub fn stderr_read(source: std::io::Error) -> Self {
+        Self::with_source(
+            SandboxErrorCode::StderrReadFailed,
+            SandboxPhase::Stderr,
+            "failed to read sandboxed process stderr",
             source,
         )
     }

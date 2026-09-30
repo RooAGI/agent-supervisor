@@ -8,8 +8,8 @@ security policy.
 
 ## Platform behavior
 
-- Linux: Landlock filesystem rules are installed without changing networking,
-  so the child inherits the host network stack.
+- Linux: filesystem rules are installed without changing networking, so the
+  child inherits the host network stack.
 - macOS: the Seatbelt filesystem profile explicitly allows inbound and
   outbound networking. Filesystem-isolated children must have their working
   directory and required system configuration paths granted.
@@ -24,9 +24,10 @@ to AppContainer-restricted loopback behavior. A stale exemption left by an
 abrupt parent termination is harmless after the associated AppContainer
 profile is deleted; later launches preserve all unrelated exemptions.
 
-`NetworkMode::Disabled` is intentionally rejected with an unsupported error
-until native network-denial enforcement is implemented. Callers can inspect
-`platform_capabilities().host_network` before constructing a request.
+`NetworkMode::Disabled` denies IP networking and preserves only local Unix IPC
+where supported. On Windows it requires a filesystem policy because the native
+AppContainer boundary supplies both filesystem and network isolation. Callers
+can inspect `platform_capabilities().network_isolation` before requiring it.
 
 ## Verification
 

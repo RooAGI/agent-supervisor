@@ -251,12 +251,8 @@ mod tests {
         ExecutionRequest {
             executable: PathBuf::from(executable),
             args: args.iter().map(|arg| (*arg).to_owned()).collect(),
-            environment: EnvironmentPolicy::default(),
             working_directory: None,
-            filesystem: None,
-            network: crate::NetworkMode::Host,
-            limits: ResourceLimits::default(),
-            enforcement: EnforcementRequirement::BestEffort,
+            policy: crate::SandboxPolicy::default(),
         }
     }
 

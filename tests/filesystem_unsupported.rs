@@ -1,6 +1,6 @@
 #![cfg(all(not(target_os = "linux"), not(target_os = "macos"), not(windows)))]
 
-use rooagi_sandbox::{
+use agent_sandbox::{
     execute, EnforcementRequirement, EnvironmentPolicy, ExecutionRequest, FilesystemPolicy,
     ResourceLimits,
 };
@@ -15,12 +15,11 @@ async fn requested_filesystem_policy_fails_closed_without_native_backend() {
             PathBuf::from("/bin/sh")
         },
         args: Vec::new(),
-        environment: EnvironmentPolicy::default(),
         working_directory: None,
-        filesystem: Some(FilesystemPolicy::deny_all()),
-        network: rooagi_sandbox::NetworkMode::Host,
-        limits: ResourceLimits::default(),
-        enforcement: EnforcementRequirement::BestEffort,
+        policy: agent_sandbox::SandboxPolicy {
+            filesystem: Some(FilesystemPolicy::deny_all()),
+            ..agent_sandbox::SandboxPolicy::default()
+        },
     };
 
     let error = execute(&request, b"").await.unwrap_err();

@@ -1,6 +1,6 @@
 # Security model
 
-`rooagi-sandbox` is a process boundary, not a complete container runtime. Its
+`agent-sandbox` is a process boundary, not a complete container runtime. Its
 security properties come from explicit policy plus native operating-system
 enforcement.
 
@@ -21,8 +21,18 @@ enforcement.
 `Some(FilesystemPolicy::deny_all())` is explicit default-deny access. Add
 `FilesystemGrant` entries only for the paths the child needs.
 
-The native backend varies by operating system. See [filesystem and network](network-host-mode.md)
-for the platform contract.
+The native backend varies by operating system. Linux uses Landlock for
+filesystem policy, Windows uses AppContainer/DACL policy, and the current
+macOS implementation uses the legacy Seatbelt launcher. macOS filesystem
+enforcement is therefore reported separately from full process containment
+and is not equivalent to Apple App Sandbox entitlements. See [filesystem and
+network](network-host-mode.md) for the platform contract.
+
+`platform_capabilities()` reports compile-time platform support. The
+`enforcement` value on an execution receipt reports the backend selected for
+that execution; callers requiring a security boundary must request
+`EnforcementRequirement::Required` and handle rejection when the host cannot
+provide it.
 
 ## Threat-model boundary
 

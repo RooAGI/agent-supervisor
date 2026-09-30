@@ -1,6 +1,6 @@
 #![cfg(target_os = "linux")]
 
-use rooagi_sandbox::{
+use agent_sandbox::{
     execute, EnforcementRequirement, EnvironmentPolicy, ExecutionRequest, FilesystemAccess,
     FilesystemGrant, FilesystemPolicy, ResourceLimits,
 };
@@ -29,18 +29,18 @@ fn request(script: &str, root: PathBuf) -> ExecutionRequest {
     ExecutionRequest {
         executable: PathBuf::from("/bin/sh"),
         args: vec!["-c".into(), script.into()],
-        environment: EnvironmentPolicy::default(),
         working_directory: Some(working_directory),
-        filesystem: Some(FilesystemPolicy::new(grants)),
-        network: rooagi_sandbox::NetworkMode::Host,
-        limits: ResourceLimits::default(),
-        enforcement: EnforcementRequirement::Required,
+        policy: agent_sandbox::SandboxPolicy {
+            filesystem: Some(FilesystemPolicy::new(grants)),
+            enforcement: EnforcementRequirement::Required,
+            ..agent_sandbox::SandboxPolicy::default()
+        },
     }
 }
 
 #[tokio::test]
 async fn landlock_allows_granted_tree_and_denies_ungranted_tree() {
-    let base = std::env::temp_dir().join(format!("rooagi-sandbox-fs-{}", std::process::id()));
+    let base = std::env::temp_dir().join(format!("agent-sandbox-fs-{}", std::process::id()));
     let allowed = base.join("allowed");
     let denied = base.join("denied");
     fs::create_dir_all(&allowed).unwrap();

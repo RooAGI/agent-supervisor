@@ -1,16 +1,16 @@
-# RooAGI Sandbox
+# RooAGI Agent Sandbox
 
 ## Reliable process control for AI agents
 
 The process boundary your agent runtime can trust.
 
-`rooagi-sandbox` gives agent builders a native, policy-driven boundary for
+`agent-sandbox` gives agent builders a native, policy-driven boundary for
 running tools, MCP servers, subprocesses, and pipelines.
 
 It turns an already-authorized execution request into a supervised process:
 
 ```text
-agent runtime → ExecutionRequest → rooagi-sandbox → child process
+agent runtime → ExecutionRequest → agent-sandbox → child process
 ```
 
 The sandbox owns process containment and cleanup. The runtime remains
@@ -18,7 +18,7 @@ responsible for authorization, credentials, graph identity, and tool policy.
 
 ## Built for every agent builder
 
-RooAGI Sandbox is for teams building:
+RooAGI Agent Sandbox is for teams building:
 
 - agent frameworks that need one process boundary across operating systems;
 - MCP servers and tool adapters that must be bounded and cleaned up reliably;

@@ -24,3 +24,8 @@ The boundary keeps credentials and agent policy out of the process supervisor.
 An MCP client may run through the sandbox, but the sandbox does not acquire or
 forward provider tokens unless the caller explicitly supplies them through the
 child environment or another approved transport.
+
+Filesystem isolation, resource limits, network isolation, and process-tree
+containment are independent capabilities. A caller must not infer that one
+being enforced means all of them are enforced. Use the execution receipt and
+platform capability report for the actual backend result.

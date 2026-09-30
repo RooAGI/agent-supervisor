@@ -20,6 +20,7 @@ enum EventMessage {
     Stdout(Vec<u8>),
     Stderr(Vec<u8>),
     Limit(bool),
+    ReadFailed(bool, std::io::Error),
     ReaderFinished,
 }
 
@@ -87,6 +88,16 @@ impl ProcessEventStream {
                         SandboxError::stderr_too_large()
                     });
                 }
+                Ok(EventMessage::ReadFailed(stdout, error)) => {
+                    if let Some(child) = self.child.take() {
+                        let _ = child.shutdown(Duration::from_millis(100)).await;
+                    }
+                    return Err(if stdout {
+                        SandboxError::stdout_read(error)
+                    } else {
+                        SandboxError::stderr_read(error)
+                    });
+                }
                 Ok(EventMessage::ReaderFinished) => {
                     self.readers_finished += 1;
                 }
@@ -118,6 +129,16 @@ impl ProcessEventStream {
                         SandboxError::output_too_large()
                     } else {
                         SandboxError::stderr_too_large()
+                    });
+                }
+                Some(EventMessage::ReadFailed(stdout, error)) => {
+                    if let Some(child) = self.child.take() {
+                        let _ = child.shutdown(Duration::from_millis(100)).await;
+                    }
+                    return Err(if stdout {
+                        SandboxError::stdout_read(error)
+                    } else {
+                        SandboxError::stderr_read(error)
                     });
                 }
                 Some(EventMessage::ReaderFinished) => {
@@ -206,7 +227,8 @@ fn spawn_reader(
                         return;
                     }
                 }
-                Err(_) => {
+                Err(error) => {
+                    let _ = sender.send(EventMessage::ReadFailed(stdout, error)).await;
                     let _ = sender.send(EventMessage::ReaderFinished).await;
                     return;
                 }
@@ -229,12 +251,8 @@ mod tests {
         let request = ExecutionRequest {
             executable: PathBuf::from("/usr/bin/printf"),
             args: vec!["hello".into()],
-            environment: EnvironmentPolicy::default(),
             working_directory: None,
-            filesystem: None,
-            network: crate::NetworkMode::Host,
-            limits: ResourceLimits::default(),
-            enforcement: EnforcementRequirement::BestEffort,
+            policy: crate::SandboxPolicy::default(),
         };
         let mut stream = spawn(&request).unwrap().into_event_stream().unwrap();
         let mut output = Vec::new();
@@ -255,12 +273,8 @@ mod tests {
         let request = ExecutionRequest {
             executable: PathBuf::from("/bin/sleep"),
             args: vec!["30".into()],
-            environment: EnvironmentPolicy::default(),
             working_directory: None,
-            filesystem: None,
-            network: crate::NetworkMode::Host,
-            limits: ResourceLimits::default(),
-            enforcement: EnforcementRequirement::BestEffort,
+            policy: crate::SandboxPolicy::default(),
         };
         let mut stream = spawn(&request).unwrap().into_event_stream().unwrap();
         assert!(matches!(

@@ -1,15 +1,15 @@
 use crate::SandboxError;
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsString;
 use std::path::PathBuf;
 use tokio::process::Command;
 
 /// Exact environment released to a child process. Ambient inheritance is
 /// disabled unless individual names are explicitly allowlisted by the host.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EnvironmentPolicy {
     pub inherit: BTreeSet<String>,
-    pub variables: BTreeMap<String, OsString>,
+    pub variables: BTreeMap<String, String>,
     pub executable_search_paths: Vec<PathBuf>,
 }
 
@@ -77,6 +77,7 @@ fn is_forbidden_environment_variable(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
 
     #[test]
     fn rejects_dynamic_loader_environment_variables() {
@@ -88,7 +89,9 @@ mod tests {
                 } else {
                     "LD_PRELOAD".to_owned()
                 },
-                OsString::from("/tmp/attacker.dylib"),
+                OsString::from("/tmp/attacker.dylib")
+                    .to_string_lossy()
+                    .into_owned(),
             )]),
             ..EnvironmentPolicy::default()
         };

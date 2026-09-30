@@ -459,20 +459,25 @@ fn spawn_internal(
     supervisor: Option<&Supervisor>,
 ) -> Result<SupervisedChild, SandboxError> {
     let identity = validate_request(request, &[])?;
-    if let Some(policy) = &request.filesystem {
+    if let Some(policy) = &request.policy.filesystem {
         crate::filesystem::validate_policy(policy)
             .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
     }
-    crate::policy::validate_network_mode(request.network)
+    crate::policy::validate_network_mode(request.policy.network)
         .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
     #[cfg(windows)]
-    if request.filesystem.is_some() {
+    validate_windows_network_policy(request, &identity)?;
+    #[cfg(windows)]
+    if request.policy.filesystem.is_some() {
         return spawn_windows_internal(request, supervisor, identity);
     }
     let mut command = Command::new(&identity.canonical_path);
     command.args(&request.args);
-    if let Some(policy) = &request.filesystem {
-        crate::filesystem::wrap_command(&mut command, policy)
+    if let Some(policy) = &request.policy.filesystem {
+        crate::filesystem::wrap_command(&mut command, policy, request.policy.network)
+            .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
+    } else if request.policy.network == crate::NetworkMode::Disabled {
+        crate::filesystem::wrap_network_command(&mut command)
             .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
     }
     command
@@ -482,22 +487,24 @@ fn spawn_internal(
         .stderr(Stdio::piped());
     let container = ProcessContainer::new()
         .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
-    let enforcement = container.enforcement_for_filesystem(request.filesystem.is_some());
-    if request.enforcement == EnforcementRequirement::Required
+    let enforcement = container.enforcement_for_filesystem(request.policy.filesystem.is_some());
+    if request.policy.enforcement == EnforcementRequirement::Required
         && enforcement != Enforcement::Enforced
     {
         return Err(SandboxError::enforcement_unavailable().with_executable(identity.clone()));
     }
     container
-        .apply_limits(&request.limits)
+        .apply_limits(&request.policy.limits)
         .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
     container.prepare_command_in_group(
         &mut command,
         None,
-        &request.limits,
-        request.filesystem.as_ref(),
+        &request.policy.limits,
+        request.policy.filesystem.as_ref(),
     );
-    apply_environment_policy(&mut command, &request.environment)
+    crate::network::prepare_command(&mut command, request.policy.network)
+        .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
+    apply_environment_policy(&mut command, &request.policy.environment)
         .map_err(|error| error.with_executable(identity.clone()))?;
     if let Some(directory) = &request.working_directory {
         command.current_dir(directory);
@@ -532,8 +539,8 @@ fn spawn_internal(
         executable: identity.clone(),
         enforcement,
         started_at: SystemTime::now(),
-        output_limit: request.limits.output_bytes,
-        stderr_limit: request.limits.stderr_bytes,
+        output_limit: request.policy.limits.output_bytes,
+        stderr_limit: request.policy.limits.stderr_bytes,
         lease: supervisor.and_then(|value| value.register(process_id, container, identity.clone())),
         owns_container: true,
     })
@@ -550,24 +557,24 @@ fn spawn_windows_internal(
             .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?,
     );
     let enforcement = container.enforcement_for_filesystem(true);
-    if request.enforcement == EnforcementRequirement::Required
+    if request.policy.enforcement == EnforcementRequirement::Required
         && enforcement != Enforcement::Enforced
     {
         return Err(SandboxError::enforcement_unavailable().with_executable(identity));
     }
     container
-        .apply_limits(&request.limits)
+        .apply_limits(&request.policy.limits)
         .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
     let mut child = crate::windows_filesystem::WindowsChild::spawn(
         &identity.canonical_path,
         &request.args,
         request.working_directory.as_deref(),
-        &request.environment,
+        &request.policy.environment,
         request
             .filesystem
             .as_ref()
             .expect("validated filesystem policy"),
-        request.network,
+        request.policy.network,
         &container,
     )
     .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
@@ -587,8 +594,8 @@ fn spawn_windows_internal(
         executable: identity,
         enforcement,
         started_at: SystemTime::now(),
-        output_limit: request.limits.output_bytes,
-        stderr_limit: request.limits.stderr_bytes,
+        output_limit: request.policy.limits.output_bytes,
+        stderr_limit: request.policy.limits.stderr_bytes,
         lease,
         owns_container: true,
     })
@@ -600,30 +607,35 @@ pub(crate) fn spawn_group_child(
     group_id: Option<u32>,
 ) -> Result<SupervisedChild, SandboxError> {
     let identity = validate_request(request, &[])?;
-    if let Some(policy) = &request.filesystem {
+    if let Some(policy) = &request.policy.filesystem {
         crate::filesystem::validate_policy(policy)
             .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
     }
-    crate::policy::validate_network_mode(request.network)
+    crate::policy::validate_network_mode(request.policy.network)
         .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
     #[cfg(windows)]
-    if request.filesystem.is_some() {
+    validate_windows_network_policy(request, &identity)?;
+    #[cfg(windows)]
+    if request.policy.filesystem.is_some() {
         return spawn_windows_group_child(request, container, identity);
     }
-    let enforcement = container.enforcement_for_filesystem(request.filesystem.is_some());
-    if request.enforcement == EnforcementRequirement::Required
+    let enforcement = container.enforcement_for_filesystem(request.policy.filesystem.is_some());
+    if request.policy.enforcement == EnforcementRequirement::Required
         && enforcement != Enforcement::Enforced
     {
         return Err(SandboxError::enforcement_unavailable().with_executable(identity));
     }
     container
-        .apply_limits(&request.limits)
+        .apply_limits(&request.policy.limits)
         .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
 
     let mut command = Command::new(&identity.canonical_path);
     command.args(&request.args);
-    if let Some(policy) = &request.filesystem {
-        crate::filesystem::wrap_command(&mut command, policy)
+    if let Some(policy) = &request.policy.filesystem {
+        crate::filesystem::wrap_command(&mut command, policy, request.policy.network)
+            .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
+    } else if request.policy.network == crate::NetworkMode::Disabled {
+        crate::filesystem::wrap_network_command(&mut command)
             .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
     }
     command
@@ -634,10 +646,12 @@ pub(crate) fn spawn_group_child(
     container.prepare_command_in_group(
         &mut command,
         group_id,
-        &request.limits,
-        request.filesystem.as_ref(),
+        &request.policy.limits,
+        request.policy.filesystem.as_ref(),
     );
-    apply_environment_policy(&mut command, &request.environment)
+    crate::network::prepare_command(&mut command, request.policy.network)
+        .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
+    apply_environment_policy(&mut command, &request.policy.environment)
         .map_err(|error| error.with_executable(identity.clone()))?;
     if let Some(directory) = &request.working_directory {
         command.current_dir(directory);
@@ -671,8 +685,8 @@ pub(crate) fn spawn_group_child(
         executable: identity,
         enforcement,
         started_at: SystemTime::now(),
-        output_limit: request.limits.output_bytes,
-        stderr_limit: request.limits.stderr_bytes,
+        output_limit: request.policy.limits.output_bytes,
+        stderr_limit: request.policy.limits.stderr_bytes,
         lease: None,
         owns_container: false,
     })
@@ -685,24 +699,24 @@ fn spawn_windows_group_child(
     identity: ExecutableIdentity,
 ) -> Result<SupervisedChild, SandboxError> {
     let enforcement = container.enforcement_for_filesystem(true);
-    if request.enforcement == EnforcementRequirement::Required
+    if request.policy.enforcement == EnforcementRequirement::Required
         && enforcement != Enforcement::Enforced
     {
         return Err(SandboxError::enforcement_unavailable().with_executable(identity));
     }
     container
-        .apply_limits(&request.limits)
+        .apply_limits(&request.policy.limits)
         .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
     let mut child = crate::windows_filesystem::WindowsChild::spawn(
         &identity.canonical_path,
         &request.args,
         request.working_directory.as_deref(),
-        &request.environment,
+        &request.policy.environment,
         request
             .filesystem
             .as_ref()
             .expect("validated filesystem policy"),
-        request.network,
+        request.policy.network,
         &container,
     )
     .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
@@ -720,8 +734,8 @@ fn spawn_windows_group_child(
         executable: identity,
         enforcement,
         started_at: SystemTime::now(),
-        output_limit: request.limits.output_bytes,
-        stderr_limit: request.limits.stderr_bytes,
+        output_limit: request.policy.limits.output_bytes,
+        stderr_limit: request.policy.limits.stderr_bytes,
         lease: None,
         owns_container: false,
     })
@@ -740,20 +754,25 @@ pub async fn execute_with_cancellation(
     cancellation: CancellationToken,
 ) -> Result<ExecutionOutput, SandboxError> {
     let identity = validate_request(request, input)?;
-    if let Some(policy) = &request.filesystem {
+    if let Some(policy) = &request.policy.filesystem {
         crate::filesystem::validate_policy(policy)
             .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
     }
-    crate::policy::validate_network_mode(request.network)
+    crate::policy::validate_network_mode(request.policy.network)
         .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
     #[cfg(windows)]
-    if request.filesystem.is_some() {
+    validate_windows_network_policy(request, &identity)?;
+    #[cfg(windows)]
+    if request.policy.filesystem.is_some() {
         return execute_windows_with_cancellation(request, input, cancellation, identity).await;
     }
     let mut command = Command::new(&identity.canonical_path);
     command.args(&request.args);
-    if let Some(policy) = &request.filesystem {
-        crate::filesystem::wrap_command(&mut command, policy)
+    if let Some(policy) = &request.policy.filesystem {
+        crate::filesystem::wrap_command(&mut command, policy, request.policy.network)
+            .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
+    } else if request.policy.network == crate::NetworkMode::Disabled {
+        crate::filesystem::wrap_network_command(&mut command)
             .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
     }
     command
@@ -763,22 +782,24 @@ pub async fn execute_with_cancellation(
         .stderr(Stdio::piped());
     let container = ProcessContainer::new()
         .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
-    let enforcement = container.enforcement_for_filesystem(request.filesystem.is_some());
-    if request.enforcement == EnforcementRequirement::Required
+    let enforcement = container.enforcement_for_filesystem(request.policy.filesystem.is_some());
+    if request.policy.enforcement == EnforcementRequirement::Required
         && enforcement != Enforcement::Enforced
     {
         return Err(SandboxError::enforcement_unavailable().with_executable(identity.clone()));
     }
     container
-        .apply_limits(&request.limits)
+        .apply_limits(&request.policy.limits)
         .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
     container.prepare_command_in_group(
         &mut command,
         None,
-        &request.limits,
-        request.filesystem.as_ref(),
+        &request.policy.limits,
+        request.policy.filesystem.as_ref(),
     );
-    apply_environment_policy(&mut command, &request.environment)
+    crate::network::prepare_command(&mut command, request.policy.network)
+        .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
+    apply_environment_policy(&mut command, &request.policy.environment)
         .map_err(|error| error.with_executable(identity.clone()))?;
     if let Some(directory) = &request.working_directory {
         command.current_dir(directory);
@@ -822,18 +843,18 @@ pub async fn execute_with_cancellation(
     let (stream_tx, mut stream_rx) = mpsc::channel(2);
     spawn_bounded_reader(
         stdout,
-        request.limits.output_bytes,
+        request.policy.limits.output_bytes,
         StreamKind::Stdout,
         stream_tx.clone(),
     );
     spawn_bounded_reader(
         stderr,
-        request.limits.stderr_bytes,
+        request.policy.limits.stderr_bytes,
         StreamKind::Stderr,
         stream_tx,
     );
 
-    let deadline = sleep(Duration::from_millis(request.limits.timeout_ms));
+    let deadline = sleep(Duration::from_millis(request.policy.limits.timeout_ms));
     tokio::pin!(deadline);
     let mut stdout = None;
     let mut stderr = None;
@@ -922,6 +943,22 @@ pub async fn execute_with_cancellation(
 }
 
 #[cfg(windows)]
+fn validate_windows_network_policy(
+    request: &ExecutionRequest,
+    identity: &ExecutableIdentity,
+) -> Result<(), SandboxError> {
+    if request.policy.network == crate::NetworkMode::Disabled && request.policy.filesystem.is_none()
+    {
+        return Err(SandboxError::spawn(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Windows network isolation requires a filesystem policy",
+        ))
+        .with_executable(identity.clone()));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
 async fn execute_windows_with_cancellation(
     request: &ExecutionRequest,
     input: &[u8],
@@ -944,9 +981,9 @@ async fn execute_windows_with_cancellation(
         }
         Ok::<(), std::io::Error>(())
     });
-    let stdout_task = tokio::spawn(read_limited(stdout, request.limits.output_bytes));
-    let stderr_task = tokio::spawn(read_limited(stderr, request.limits.stderr_bytes));
-    let timeout = sleep(Duration::from_millis(request.limits.timeout_ms));
+    let stdout_task = tokio::spawn(read_limited(stdout, request.policy.limits.output_bytes));
+    let stderr_task = tokio::spawn(read_limited(stderr, request.policy.limits.stderr_bytes));
+    let timeout = sleep(Duration::from_millis(request.policy.limits.timeout_ms));
     tokio::pin!(timeout);
     let mut termination = None;
     let (status, stdout, stderr) = tokio::select! {
@@ -1013,9 +1050,17 @@ pub(crate) fn validate_request(
     if !request.executable.is_absolute() {
         return Err(SandboxError::relative_executable());
     }
-    if input.len() > request.limits.input_bytes {
+    if request
+        .working_directory
+        .as_ref()
+        .is_some_and(|path| !path.is_absolute())
+    {
+        return Err(SandboxError::relative_working_directory());
+    }
+    if input.len() > request.policy.limits.input_bytes {
         return Err(SandboxError::input_too_large());
     }
+    validate_working_directory(request)?;
     let canonical_path =
         std::fs::canonicalize(&request.executable).map_err(SandboxError::invalid_executable)?;
     if !canonical_path.is_file() {
@@ -1028,6 +1073,44 @@ pub(crate) fn validate_request(
         requested_path: request.executable.clone(),
         canonical_path,
     })
+}
+
+fn validate_working_directory(request: &ExecutionRequest) -> Result<(), SandboxError> {
+    let Some(working_directory) = request.working_directory.as_ref() else {
+        return Ok(());
+    };
+    let Some(filesystem) = request.policy.filesystem.as_ref() else {
+        return Ok(());
+    };
+    let canonical_directory = std::fs::canonicalize(working_directory)
+        .map_err(SandboxError::invalid_working_directory)?;
+    if !canonical_directory.is_dir() {
+        return Err(SandboxError::invalid_working_directory(
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "working directory is not a directory",
+            ),
+        ));
+    }
+    let granted = filesystem.grants.iter().any(|grant| {
+        let readable = grant.access.iter().any(|access| {
+            matches!(
+                access,
+                crate::FilesystemAccess::Read
+                    | crate::FilesystemAccess::Write
+                    | crate::FilesystemAccess::Append
+            )
+        });
+        readable
+            && std::fs::canonicalize(&grant.root)
+                .map(|root| canonical_directory.starts_with(root))
+                .unwrap_or(false)
+    });
+    if granted {
+        Ok(())
+    } else {
+        Err(SandboxError::working_directory_not_granted())
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1099,20 +1182,16 @@ mod tests {
         ExecutionRequest {
             executable: PathBuf::from(executable),
             args: Vec::new(),
-            environment: EnvironmentPolicy::default(),
             working_directory: None,
-            filesystem: None,
-            network: crate::NetworkMode::Host,
-            limits: ResourceLimits::default(),
-            enforcement: EnforcementRequirement::BestEffort,
+            policy: crate::SandboxPolicy::default(),
         }
     }
 
     #[tokio::test]
     async fn environment_is_empty_unless_explicitly_released() {
         let mut request = request("/usr/bin/env");
-        request.environment.variables =
-            BTreeMap::from([("PLUGIN_VISIBLE".into(), OsString::from("allowed"))]);
+        request.policy.environment.variables =
+            BTreeMap::from([("PLUGIN_VISIBLE".into(), "allowed".into())]);
         let output = execute(&request, b"").await.unwrap();
         let environment = String::from_utf8(output.stdout).unwrap();
         assert!(environment.contains("PLUGIN_VISIBLE=allowed"));
@@ -1124,7 +1203,7 @@ mod tests {
     #[tokio::test]
     async fn output_limit_terminates_while_streaming() {
         let mut request = request("/usr/bin/yes");
-        request.limits.output_bytes = 128;
+        request.policy.limits.output_bytes = 128;
         let output = execute(&request, b"").await.unwrap();
         assert_eq!(output.stdout.len(), 128);
         assert_eq!(output.termination, TerminationReason::StdoutLimitExceeded);
@@ -1145,7 +1224,7 @@ mod tests {
     #[tokio::test]
     async fn required_os_enforcement_fails_closed() {
         let mut request = request("/usr/bin/true");
-        request.enforcement = EnforcementRequirement::Required;
+        request.policy.enforcement = EnforcementRequirement::Required;
         assert!(matches!(
             execute(&request, b"").await,
             Err(error) if error.code() == "sandbox_enforcement_unavailable"
@@ -1153,12 +1232,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn disabled_network_fails_closed_instead_of_using_host_network() {
+    async fn disabled_network_blocks_ip_socket_creation() {
+        let mut request = request("/usr/bin/python3");
+        request.policy.network = crate::NetworkMode::Disabled;
+        request.args = vec![
+            "-c".into(),
+            "import socket; socket.socket(socket.AF_INET, socket.SOCK_STREAM)".into(),
+        ];
+        let output = execute(&request, b"").await.unwrap();
+        assert!(!output.success, "IP socket creation unexpectedly succeeded");
+    }
+
+    #[tokio::test]
+    async fn rejects_relative_working_directory() {
         let mut request = request("/usr/bin/true");
-        request.network = crate::NetworkMode::Disabled;
+        request.working_directory = Some(PathBuf::from("."));
         let error = execute(&request, b"").await.unwrap_err();
-        assert_eq!(error.code(), "spawn_failed");
-        assert!(std::error::Error::source(&error).is_some());
+        assert_eq!(error.code(), "relative_working_directory");
+    }
+
+    #[tokio::test]
+    async fn rejects_ungranted_working_directory() {
+        let mut request = request("/usr/bin/true");
+        request.working_directory = Some(std::env::current_dir().unwrap());
+        request.policy.filesystem = Some(crate::FilesystemPolicy::deny_all());
+        let error = execute(&request, b"").await.unwrap_err();
+        assert_eq!(error.code(), "working_directory_not_granted");
     }
 
     #[tokio::test]

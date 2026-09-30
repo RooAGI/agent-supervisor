@@ -1,6 +1,6 @@
 #![cfg(windows)]
 
-use rooagi_sandbox::{
+use agent_sandbox::{
     execute, EnforcementRequirement, EnvironmentPolicy, ExecutionRequest, FilesystemAccess,
     FilesystemGrant, FilesystemPolicy, ResourceLimits,
 };
@@ -16,19 +16,20 @@ fn request(args: Vec<String>, policy: FilesystemPolicy) -> ExecutionRequest {
     ExecutionRequest {
         executable: PathBuf::from(windir).join("System32").join("cmd.exe"),
         args,
-        environment: EnvironmentPolicy {
-            inherit: ["SystemRoot", "ComSpec"]
-                .into_iter()
-                .map(str::to_owned)
-                .collect(),
-            variables: BTreeMap::new(),
-            executable_search_paths: Vec::new(),
+        policy: agent_sandbox::SandboxPolicy {
+            environment: EnvironmentPolicy {
+                inherit: ["SystemRoot", "ComSpec"]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+                variables: BTreeMap::new(),
+                executable_search_paths: Vec::new(),
+            },
+            working_directory: None,
+            filesystem: Some(policy),
+            enforcement: EnforcementRequirement::Required,
+            ..agent_sandbox::SandboxPolicy::default()
         },
-        working_directory: None,
-        filesystem: Some(policy),
-        network: rooagi_sandbox::NetworkMode::Host,
-        limits: ResourceLimits::default(),
-        enforcement: EnforcementRequirement::Required,
     }
 }
 

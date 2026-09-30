@@ -50,9 +50,17 @@ impl PtySession {
         request: &ExecutionRequest,
         dimensions: PtyDimensions,
     ) -> Result<Self, SandboxError> {
-        crate::policy::validate_network_mode(request.network).map_err(SandboxError::spawn)?;
+        crate::policy::validate_network_mode(request.policy.network)
+            .map_err(SandboxError::spawn)?;
         let identity = validate_request(request, &[])?;
-        if let Some(policy) = &request.filesystem {
+        if request.policy.network == crate::NetworkMode::Disabled {
+            return Err(SandboxError::spawn(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "network isolation is not supported for PTY sessions",
+            ))
+            .with_executable(identity));
+        }
+        if let Some(policy) = &request.policy.filesystem {
             crate::filesystem::validate_policy(policy)
                 .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
             return Err(SandboxError::spawn(std::io::Error::new(
@@ -61,16 +69,16 @@ impl PtySession {
             ))
             .with_executable(identity));
         }
-        validate_environment_policy(&request.environment)?;
+        validate_environment_policy(&request.policy.environment)?;
         let container = Arc::new(ProcessContainer::new().map_err(SandboxError::spawn)?);
         let enforcement = container.enforcement();
-        if request.enforcement == EnforcementRequirement::Required
+        if request.policy.enforcement == EnforcementRequirement::Required
             && enforcement != Enforcement::Enforced
         {
             return Err(SandboxError::enforcement_unavailable().with_executable(identity));
         }
         container
-            .apply_limits(&request.limits)
+            .apply_limits(&request.policy.limits)
             .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
         let system = native_pty_system();
         let pair = system
@@ -80,12 +88,12 @@ impl PtySession {
         let mut command = CommandBuilder::new(&identity.canonical_path);
         command.args(&request.args);
         command.env_clear();
-        for name in &request.environment.inherit {
+        for name in &request.policy.environment.inherit {
             if let Some(value) = std::env::var_os(name) {
                 command.env(name, value);
             }
         }
-        for (name, value) in &request.environment.variables {
+        for (name, value) in &request.policy.environment.variables {
             command.env(name, value);
         }
         if let Some(directory) = &request.working_directory {
@@ -214,12 +222,8 @@ mod tests {
         let request = ExecutionRequest {
             executable: PathBuf::from("/bin/echo"),
             args: vec!["hello".into()],
-            environment: EnvironmentPolicy::default(),
             working_directory: None,
-            filesystem: None,
-            network: crate::NetworkMode::Host,
-            limits: ResourceLimits::default(),
-            enforcement: EnforcementRequirement::BestEffort,
+            policy: crate::SandboxPolicy::default(),
         };
         let mut session = PtySession::start(&request, PtyDimensions::default()).unwrap();
         let mut output = Vec::new();
@@ -247,12 +251,8 @@ mod tests {
         let request = ExecutionRequest {
             executable: PathBuf::from("/bin/sleep"),
             args: vec!["30".into()],
-            environment: EnvironmentPolicy::default(),
             working_directory: None,
-            filesystem: None,
-            network: crate::NetworkMode::Host,
-            limits: ResourceLimits::default(),
-            enforcement: EnforcementRequirement::BestEffort,
+            policy: crate::SandboxPolicy::default(),
         };
         let session = PtySession::start(&request, PtyDimensions::default()).unwrap();
         let receipt = session.wait_timeout(Duration::from_millis(10)).unwrap();

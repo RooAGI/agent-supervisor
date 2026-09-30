@@ -146,14 +146,9 @@ impl ProcessContainer {
 
     pub(crate) fn enforcement_for_filesystem(
         &self,
-        #[cfg(target_os = "macos")] filesystem_requested: bool,
+        #[cfg(target_os = "macos")] _filesystem_requested: bool,
         #[cfg(not(target_os = "macos"))] _filesystem_requested: bool,
     ) -> Enforcement {
-        #[cfg(target_os = "macos")]
-        if filesystem_requested {
-            return Enforcement::Enforced;
-        }
-
         self.enforcement()
     }
 

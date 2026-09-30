@@ -333,7 +333,7 @@ fn environment_block(policy: &EnvironmentPolicy) -> io::Result<Vec<u16>> {
         policy
             .variables
             .iter()
-            .map(|(name, value)| (OsString::from(name), value.clone())),
+            .map(|(name, value)| (OsString::from(name), OsString::from(value))),
     );
     if !policy.executable_search_paths.is_empty() {
         entries.push((
@@ -367,12 +367,12 @@ struct CapabilitySids {
 impl CapabilitySids {
     fn for_network(network: NetworkMode) -> io::Result<Self> {
         if matches!(network, NetworkMode::Disabled) {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "network-disabled mode cannot be launched in an AppContainer",
-            ));
+            return Ok(Self {
+                entries: Vec::new(),
+                sids: Vec::new(),
+                arrays: Vec::new(),
+            });
         }
-
         let names = [
             "internetClient",
             "internetClientServer",
@@ -512,7 +512,7 @@ struct WindowsSandbox {
 impl WindowsSandbox {
     fn prepare(policy: &FilesystemPolicy) -> io::Result<Self> {
         let id = NEXT_PROFILE.fetch_add(1, Ordering::Relaxed);
-        let name = format!("rooagi-sandbox-{}-{}", std::process::id(), id);
+        let name = format!("agent-sandbox-{}-{}", std::process::id(), id);
         let profile_name = wide_string(&name)?;
         let sid = create_profile(&profile_name)?;
         let loopback = match LoopbackExemption::enable(sid) {

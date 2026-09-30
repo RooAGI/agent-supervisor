@@ -1,6 +1,6 @@
 #![cfg(target_os = "macos")]
 
-use rooagi_sandbox::{
+use agent_sandbox::{
     execute, EnforcementRequirement, EnvironmentPolicy, ExecutionRequest, FilesystemAccess,
     FilesystemGrant, FilesystemPolicy, ResourceLimits,
 };
@@ -15,44 +15,44 @@ fn request(script: &str, root: PathBuf) -> ExecutionRequest {
     ExecutionRequest {
         executable: PathBuf::from("/bin/sh"),
         args: vec!["-c".into(), script.into()],
-        environment: EnvironmentPolicy::default(),
         working_directory: Some(root.clone()),
-        filesystem: Some(FilesystemPolicy::new(vec![
-            FilesystemGrant {
-                root,
-                access: vec![FilesystemAccess::Read, FilesystemAccess::Write],
-            },
-            // These are read-only runtime locations needed by dynamically
-            // linked system tools. The workspace grant above remains the only
-            // writable user-controlled tree.
-            FilesystemGrant {
-                root: PathBuf::from("/System"),
-                access: vec![FilesystemAccess::Read],
-            },
-            FilesystemGrant {
-                root: PathBuf::from("/usr"),
-                access: vec![FilesystemAccess::Read],
-            },
-            FilesystemGrant {
-                root: PathBuf::from("/bin"),
-                access: vec![FilesystemAccess::Read],
-            },
-            FilesystemGrant {
-                root: PathBuf::from("/dev"),
-                access: vec![FilesystemAccess::Read],
-            },
-            FilesystemGrant {
-                root: PathBuf::from("/private/var/db"),
-                access: vec![FilesystemAccess::Read],
-            },
-            FilesystemGrant {
-                root: PathBuf::from("/private/etc/ssl"),
-                access: vec![FilesystemAccess::Read],
-            },
-        ])),
-        network: rooagi_sandbox::NetworkMode::Host,
-        limits: ResourceLimits::default(),
-        enforcement: EnforcementRequirement::Required,
+        policy: agent_sandbox::SandboxPolicy {
+            environment: EnvironmentPolicy::default(),
+            filesystem: Some(FilesystemPolicy::new(vec![
+                FilesystemGrant {
+                    root,
+                    access: vec![FilesystemAccess::Read, FilesystemAccess::Write],
+                },
+                // These are read-only runtime locations needed by dynamically
+                // linked system tools. The workspace grant above remains the only
+                // writable user-controlled tree.
+                FilesystemGrant {
+                    root: PathBuf::from("/System"),
+                    access: vec![FilesystemAccess::Read],
+                },
+                FilesystemGrant {
+                    root: PathBuf::from("/usr"),
+                    access: vec![FilesystemAccess::Read],
+                },
+                FilesystemGrant {
+                    root: PathBuf::from("/bin"),
+                    access: vec![FilesystemAccess::Read],
+                },
+                FilesystemGrant {
+                    root: PathBuf::from("/dev"),
+                    access: vec![FilesystemAccess::Read],
+                },
+                FilesystemGrant {
+                    root: PathBuf::from("/private/var/db"),
+                    access: vec![FilesystemAccess::Read],
+                },
+                FilesystemGrant {
+                    root: PathBuf::from("/private/etc/ssl"),
+                    access: vec![FilesystemAccess::Read],
+                },
+            ])),
+            ..agent_sandbox::SandboxPolicy::default()
+        },
     }
 }
 
@@ -60,7 +60,7 @@ fn request(script: &str, root: PathBuf) -> ExecutionRequest {
 async fn seatbelt_allows_granted_tree_and_denies_ungranted_tree() {
     let base = fs::canonicalize(std::env::temp_dir())
         .unwrap()
-        .join(format!("rooagi-sandbox-macos-fs-{}", std::process::id()));
+        .join(format!("agent-sandbox-macos-fs-{}", std::process::id()));
     let allowed = base.join("allowed");
     let denied = base.join("denied");
     fs::create_dir_all(&allowed).unwrap();

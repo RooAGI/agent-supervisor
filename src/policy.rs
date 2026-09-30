@@ -24,6 +24,11 @@ pub struct PlatformCapabilities {
     /// launcher. This is independent of filesystem containment: Windows
     /// AppContainers require explicit network capability setup.
     pub host_network: bool,
+    /// Whether the native backend can deny IP networking for a child.
+    pub network_isolation: bool,
+    /// Whether network isolation requires an explicit filesystem policy.
+    /// Windows uses an AppContainer for both restrictions.
+    pub network_isolation_requires_filesystem: bool,
     pub graceful_shutdown: bool,
     pub process_group_cleanup: bool,
     pub parent_death_cleanup: bool,
@@ -37,6 +42,8 @@ pub struct PlatformCapabilities {
     pub process_limits: bool,
     pub cpu_limits: bool,
     /// Whether a requested filesystem policy is enforced by the native backend.
+    /// macOS uses the legacy Seatbelt launcher rather than signed App Sandbox
+    /// entitlements, but still applies the requested profile to the child.
     pub filesystem_isolation: bool,
 }
 
@@ -50,6 +57,8 @@ pub const fn platform_capabilities() -> PlatformCapabilities {
             Enforcement::Unavailable
         },
         host_network: cfg!(unix) || cfg!(windows),
+        network_isolation: cfg!(target_os = "linux") || cfg!(target_os = "macos") || cfg!(windows),
+        network_isolation_requires_filesystem: cfg!(windows),
         graceful_shutdown: cfg!(unix),
         process_group_cleanup: cfg!(unix) || cfg!(windows),
         parent_death_cleanup: cfg!(target_os = "linux") || cfg!(windows),
@@ -70,7 +79,8 @@ pub const fn platform_capabilities() -> PlatformCapabilities {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EnforcementRequirement {
     BestEffort,
     Required,
@@ -83,17 +93,12 @@ pub enum NetworkMode {
     /// Share the host network. This is the compatibility default.
     #[default]
     Host,
-    /// Deny network access. Rejected until a native backend is available.
+    /// Deny IP network access while retaining local Unix IPC where supported.
     Disabled,
 }
 
 pub(crate) fn validate_network_mode(mode: NetworkMode) -> io::Result<()> {
-    if matches!(mode, NetworkMode::Disabled) {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "network-disabled mode is not yet supported by the native backends",
-        ));
-    }
+    let _ = mode;
     Ok(())
 }
 
@@ -128,6 +133,29 @@ impl Default for ResourceLimits {
     }
 }
 
+/// Complete authority passed to a child-process backend.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxPolicy {
+    pub environment: EnvironmentPolicy,
+    pub filesystem: Option<FilesystemPolicy>,
+    pub network: NetworkMode,
+    pub limits: ResourceLimits,
+    pub enforcement: EnforcementRequirement,
+}
+
+impl Default for SandboxPolicy {
+    fn default() -> Self {
+        Self {
+            environment: EnvironmentPolicy::default(),
+            filesystem: None,
+            network: NetworkMode::Host,
+            limits: ResourceLimits::default(),
+            enforcement: EnforcementRequirement::BestEffort,
+        }
+    }
+}
+
 impl ResourceLimits {
     pub fn has_kernel_limits(&self) -> bool {
         self.memory_bytes.is_some()
@@ -140,15 +168,8 @@ impl ResourceLimits {
 pub struct ExecutionRequest {
     pub executable: PathBuf,
     pub args: Vec<String>,
-    pub environment: EnvironmentPolicy,
     pub working_directory: Option<PathBuf>,
-    /// `Some` applies a default-deny filesystem policy. `None` preserves the
-    /// unrestricted filesystem behavior for callers that do not request it.
-    pub filesystem: Option<FilesystemPolicy>,
-    /// Network mode. `Host` is the compatibility default.
-    pub network: NetworkMode,
-    pub limits: ResourceLimits,
-    pub enforcement: EnforcementRequirement,
+    pub policy: SandboxPolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

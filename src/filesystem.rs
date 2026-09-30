@@ -128,12 +128,16 @@ fn validate_platform_support() -> io::Result<()> {
     ))
 }
 
-/// Wrap a macOS command in a generated default-deny Seatbelt profile before
+/// Wrap a macOS command in a generated default-deny legacy Seatbelt profile before
 /// the caller adds stdio, environment, and lifecycle configuration. This is
 /// kept separate from `prepare_command` because Tokio does not expose a
 /// program setter after a command has been configured.
 #[cfg(target_os = "macos")]
-pub(crate) fn wrap_command(command: &mut Command, policy: &FilesystemPolicy) -> io::Result<()> {
+pub(crate) fn wrap_command(
+    command: &mut Command,
+    policy: &FilesystemPolicy,
+    network: crate::NetworkMode,
+) -> io::Result<()> {
     use std::mem;
     validate_policy(policy)?;
     let program = command.as_std().get_program().to_owned();
@@ -143,18 +147,40 @@ pub(crate) fn wrap_command(command: &mut Command, policy: &FilesystemPolicy) -> 
         .map(std::ffi::OsStr::to_owned)
         .collect::<Vec<_>>();
     let _original = mem::replace(command, Command::new("/usr/bin/sandbox-exec"));
-    let profile = macos_profile(policy)?;
+    let profile = macos_profile(policy, network)?;
     command.arg("-p").arg(profile).arg(program).args(args);
     Ok(())
 }
 
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn wrap_command(_command: &mut Command, _policy: &FilesystemPolicy) -> io::Result<()> {
+pub(crate) fn wrap_command(
+    _command: &mut Command,
+    _policy: &FilesystemPolicy,
+    _network: crate::NetworkMode,
+) -> io::Result<()> {
+    Ok(())
+}
+
+/// Apply the Seatbelt boundary for a network-restricted command that did not
+/// request explicit filesystem grants. Seatbelt is also the macOS mechanism
+/// that removes IP networking; the default-deny filesystem is intentional for
+/// this restrictive mode.
+#[cfg(target_os = "macos")]
+pub(crate) fn wrap_network_command(command: &mut Command) -> io::Result<()> {
+    wrap_command(
+        command,
+        &FilesystemPolicy::deny_all(),
+        crate::NetworkMode::Disabled,
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn wrap_network_command(_command: &mut Command) -> io::Result<()> {
     Ok(())
 }
 
 #[cfg(target_os = "macos")]
-fn macos_profile(policy: &FilesystemPolicy) -> io::Result<String> {
+fn macos_profile(policy: &FilesystemPolicy, network: crate::NetworkMode) -> io::Result<String> {
     let mut profile = String::from(
         "(version 1)\n\
          (import \"system.sb\")\n\
@@ -170,9 +196,15 @@ fn macos_profile(policy: &FilesystemPolicy) -> io::Result<String> {
          (allow file-read* file-test-existence file-map-executable (subpath \"/sbin\"))\n\
          (allow file-read* file-test-existence (subpath \"/dev\"))\n\
          (allow file-read* file-test-existence (subpath \"/private/var/db\"))\n\
-         (allow network-outbound)\n\
-         (allow network-inbound)\n",
+         ",
     );
+    if network == crate::NetworkMode::Host {
+        profile.push_str("(allow network-outbound)\n(allow network-inbound)\n");
+    } else {
+        profile.push_str(
+            "(allow network-outbound (remote unix))\n(allow network-inbound (local unix))\n",
+        );
+    }
 
     for grant in &policy.grants {
         let root = macos_profile_path(&grant.root)?;

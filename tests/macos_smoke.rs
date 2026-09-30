@@ -1,6 +1,6 @@
 #![cfg(target_os = "macos")]
 
-use rooagi_sandbox::{
+use agent_sandbox::{
     EnforcementRequirement, EnvironmentPolicy, ExecutionRequest, ProcessGroup, ResourceLimits,
 };
 use std::os::unix::process::CommandExt;
@@ -11,12 +11,8 @@ fn command() -> ExecutionRequest {
     ExecutionRequest {
         executable: PathBuf::from("/bin/sh"),
         args: vec!["-c".into(), "sleep 2".into()],
-        environment: EnvironmentPolicy::default(),
         working_directory: None,
-        filesystem: None,
-        network: rooagi_sandbox::NetworkMode::Host,
-        limits: ResourceLimits::default(),
-        enforcement: EnforcementRequirement::BestEffort,
+        policy: agent_sandbox::SandboxPolicy::default(),
     }
 }
 

@@ -4,7 +4,7 @@
 
 ```toml
 [dependencies]
-rooagi-sandbox = "0.1.0"
+agent-sandbox = "0.1.0"
 ```
 
 ## Build an execution request
@@ -14,21 +14,23 @@ network mode, resource limits, and enforcement requirement. The sandbox does
 not infer missing authority.
 
 ```rust
-use rooagi_sandbox::{
+use agent_sandbox::{
     execute, EnforcementRequirement, EnvironmentPolicy, ExecutionRequest,
-    NetworkMode, ResourceLimits,
+    NetworkMode, ResourceLimits, SandboxPolicy,
 };
 use std::path::PathBuf;
 
 let request = ExecutionRequest {
     executable: PathBuf::from("/usr/bin/printf"),
     args: vec!["hello\\n".into()],
-    environment: EnvironmentPolicy::default(),
     working_directory: None,
-    filesystem: None,
-    network: NetworkMode::Host,
-    limits: ResourceLimits::default(),
-    enforcement: EnforcementRequirement::BestEffort,
+    policy: SandboxPolicy {
+        environment: EnvironmentPolicy::default(),
+        filesystem: None,
+        network: NetworkMode::Host,
+        limits: ResourceLimits::default(),
+        enforcement: EnforcementRequirement::BestEffort,
+    },
 };
 
 let output = execute(&request, b"").await?;

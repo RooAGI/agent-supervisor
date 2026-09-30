@@ -75,12 +75,8 @@ mod tests {
         let request = ExecutionRequest {
             executable: PathBuf::from("mock"),
             args: Vec::new(),
-            environment: crate::EnvironmentPolicy::default(),
             working_directory: None,
-            filesystem: None,
-            network: crate::NetworkMode::Host,
-            limits: crate::ResourceLimits::default(),
-            enforcement: crate::EnforcementRequirement::BestEffort,
+            policy: crate::SandboxPolicy::default(),
         };
         let output = execute_with_runner(&MockRunner, &request, b"input")
             .await

@@ -1,5 +1,5 @@
+use agent_sandbox::ResourceLimits;
 use proptest::prelude::*;
-use rooagi_sandbox::ResourceLimits;
 
 proptest! {
     #[test]

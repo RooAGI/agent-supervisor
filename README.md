@@ -1,8 +1,8 @@
-# RooAGI Sandbox
+# RooAGI Agent Sandbox
 
 RELIABLE PROCESS CONTROL FOR AI AGENTS
 
-RooAGI Sandbox is the process boundary your agent runtime can trust: a native,
+RooAGI Agent Sandbox is the process boundary your agent runtime can trust: a native,
 policy-driven supervisor for tools, MCP servers, subprocesses, PTY sessions,
 and pipelines.
 
@@ -15,7 +15,7 @@ The current release is **0.1.0**.
 
 ## Built for every agent builder
 
-RooAGI Sandbox is for teams building:
+RooAGI Agent Sandbox is for teams building:
 
 - agent frameworks that need one process boundary across operating systems;
 - MCP servers and tool adapters that must be bounded and cleaned up reliably;
@@ -37,7 +37,7 @@ or fail to clean up after cancellation. A runtime needs one consistent process
 boundary across Linux, macOS, and Windows without turning every tool adapter
 into an operating-system integration.
 
-RooAGI Sandbox provides that boundary. It makes execution policy explicit,
+RooAGI Agent Sandbox provides that boundary. It makes execution policy explicit,
 keeps process ownership with a supervisor, and returns structured receipts and
 errors that an agent runtime can record or act on.
 
@@ -70,7 +70,7 @@ semantics:
 ## Architecture
 
 ```text
-agent runtime → authorized ExecutionRequest → rooagi-sandbox → child process
+agent runtime → authorized ExecutionRequest → agent-sandbox → child process
 ```
 
 The runtime owns:
@@ -120,27 +120,29 @@ Add the crate:
 
 ```toml
 [dependencies]
-rooagi-sandbox = "0.1.0"
+agent-sandbox = "0.1.0"
 ```
 
 Create an explicit request and execute it:
 
 ```rust
-use rooagi_sandbox::{
+use agent_sandbox::{
     execute, EnforcementRequirement, EnvironmentPolicy, ExecutionRequest,
-    NetworkMode, ResourceLimits,
+    NetworkMode, ResourceLimits, SandboxPolicy,
 };
 use std::path::PathBuf;
 
 let request = ExecutionRequest {
     executable: PathBuf::from("/usr/bin/printf"),
     args: vec!["hello\\n".into()],
-    environment: EnvironmentPolicy::default(),
     working_directory: None,
-    filesystem: None,
-    network: NetworkMode::Host,
-    limits: ResourceLimits::default(),
-    enforcement: EnforcementRequirement::BestEffort,
+    policy: SandboxPolicy {
+        environment: EnvironmentPolicy::default(),
+        filesystem: None,
+        network: NetworkMode::Host,
+        limits: ResourceLimits::default(),
+        enforcement: EnforcementRequirement::BestEffort,
+    },
 };
 
 let output = execute(&request, b"").await?;
@@ -161,9 +163,11 @@ uses the host resolver, interfaces, routes, firewall rules, and proxy
 environment. It does not create a network namespace, proxy, or destination
 allow-list.
 
-`NetworkMode::Disabled` is reserved and fails closed until native network
-denial is implemented. See [host network mode](docs/network-host-mode.md) for
-the platform-specific contract and test requirements.
+`NetworkMode::Disabled` denies IP networking while retaining local Unix IPC
+where supported. Linux, macOS, and Windows use native enforcement; Windows
+requires an explicit filesystem policy because AppContainer provides both
+boundaries. See [host network mode](docs/network-host-mode.md) for the
+platform-specific contract and test requirements.
 
 ## Filesystem and environment policy
 
@@ -199,7 +203,7 @@ The full documentation is published with MkDocs Material and includes the
 quickstart, security model, supervisor lifecycle, process groups, platform
 behavior, and release notes:
 
-<https://rooagidev.github.io/rooagi-sandbox/>
+<https://rooagi.github.io/AgentSandbox/>
 
 ## Release
 
@@ -208,6 +212,6 @@ scope, compatibility notes, and platform limitations.
 
 ## License
 
-RooAGI Sandbox is licensed under the [Apache License, Version 2.0](LICENSE).
+RooAGI Agent Sandbox is licensed under the [Apache License, Version 2.0](LICENSE).
 You may use, modify, and distribute it, including in open-source and
 commercial agent products, subject to the license terms.

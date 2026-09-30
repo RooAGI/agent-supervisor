@@ -9,6 +9,7 @@ mod error;
 mod events;
 mod filesystem;
 mod group;
+mod network;
 mod pipeline;
 mod policy;
 mod probes;
@@ -29,8 +30,8 @@ pub use policy::{
     platform_capabilities, Enforcement, EnforcementRequirement, ExecutableIdentity,
     ExecutionRequest, LifecycleEvent, NetworkMode, PlatformCapabilities, ProcessGroupSnapshot,
     ProcessInfo, ProcessMember, ProcessReceipt, ProcessSignal, ResourceLimits, ResourceStats,
-    ResourceStatsSample, ResourceStatsSeries, RestartPolicy, ShutdownReport, SupervisionConfig,
-    SupervisionOutcome, TerminationReason,
+    ResourceStatsSample, ResourceStatsSeries, RestartPolicy, SandboxPolicy, ShutdownReport,
+    SupervisionConfig, SupervisionOutcome, TerminationReason,
 };
 pub use probes::{wait_for_http, wait_for_port, wait_for_tcp, ProbeError};
 pub use pty::{PtyDimensions, PtySession};
