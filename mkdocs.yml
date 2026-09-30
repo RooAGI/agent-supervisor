@@ -41,6 +41,7 @@ nav:
   - Get started:
       - Quickstart: quickstart.md
       - API boundaries: api-boundaries.md
+      - Python API: python-api.md
       - OpenShell developer adapter: openshell.md
   - Security:
       - Security model: security-model.md
@@ -49,6 +50,7 @@ nav:
       - Supervisor lifecycle: supervisor-lifecycle.md
       - Process groups and resources: process-groups.md
   - Releases:
+      - 0.1.2: releases/0.1.2.md
       - 0.1.1: releases/0.1.1.md
       - 0.1.0: releases/0.1.0.md
 

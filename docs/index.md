@@ -32,7 +32,7 @@ hide:
   </section>
 
   <section class="capability-ribbon" aria-label="Project highlights">
-    <div><strong>One Rust library</strong><span>for your application</span></div>
+    <div><strong>Rust core + Python API</strong><span>one-shot execution and streaming</span></div>
     <div><strong>Native · OpenShell preview</strong><span>local execution and adapter experiments</span></div>
     <div><strong>Explicit policy</strong><span>no inferred authority</span></div>
     <div><strong>Structured outcomes</strong><span>with lifecycle records</span></div>
@@ -62,11 +62,11 @@ hide:
   </section>
 
   <section class="platform-section">
-    <div><p class="eyebrow">FOR DEVELOPERS BUILDING WITH PROCESSES</p><h2>Stop rebuilding subprocess supervision in every application.</h2><p>When a tool times out but its child keeps running, or an MCP server needs an orderly shutdown, custom wrappers grow quickly. Agent Supervisor puts execution, process groups, lifecycle handling, and outcomes behind one Rust API. Choose native execution across Linux, macOS, and Windows, or experiment with a separate OpenShell developer adapter for one-shot commands in an existing managed sandbox.</p><a href="openshell/">Read the OpenShell developer adapter contract <span aria-hidden="true">→</span></a></div>
+    <div><p class="eyebrow">FOR DEVELOPERS BUILDING WITH PROCESSES</p><h2>Stop rebuilding subprocess supervision in every application.</h2><p>When a tool times out but its child keeps running, or an MCP server needs an orderly shutdown, custom wrappers grow quickly. Agent Supervisor puts execution, process groups, lifecycle handling, and outcomes behind one Rust API, with an async Python binding for bounded one-shot commands and output streaming. Choose native execution across Linux, macOS, and Windows, or experiment with a separate OpenShell developer adapter for one-shot commands in an existing managed sandbox.</p><a href="python-api/">Read the Python API guide <span aria-hidden="true">→</span></a><br><a href="openshell/">Read the OpenShell developer adapter contract <span aria-hidden="true">→</span></a></div>
     <div class="platform-list"><div><span>01</span><strong>Rust desktop and CLI apps</strong><small>Embed process control in your application</small></div><div><span>02</span><strong>Agent frameworks</strong><small>Share execution and cleanup across tool adapters</small></div><div><span>03</span><strong>MCP server managers</strong><small>Handle startup, readiness, shutdown, and children</small></div><div><span>04</span><strong>Persistent subprocess workflows</strong><small>Track process groups, identity, and lifecycle events</small></div></div>
   </section>
 
   <aside class="boundary-note"><span class="boundary-note__mark">i</span><div><strong>A process supervisor, with a clear security boundary.</strong><p>Agent Supervisor is not a complete container runtime. The caller must authenticate and authorize each request. Read the <a href="security-model/">security model</a> before relying on an enforcement feature.</p></div></aside>
 
-  <section class="final-cta"><p class="eyebrow">AGENT SUPERVISOR · 0.1.1</p><h2>Give every tool process a lifecycle.</h2><p>Start with the Rust quickstart. Set the limits you need, supervise the work, and inspect its recorded outcome.</p><div><a class="md-button md-button--primary" href="quickstart/">Read the quickstart</a><a class="text-link" href="releases/0.1.1/">Review release scope <span aria-hidden="true">→</span></a></div></section>
+  <section class="final-cta"><p class="eyebrow">AGENT SUPERVISOR · 0.1.2</p><h2>Give every tool process a lifecycle.</h2><p>Start with the Rust or Python guide. Set the limits you need, supervise the work, and inspect its recorded outcome.</p><div><a class="md-button md-button--primary" href="quickstart/">Rust quickstart</a><a class="md-button" href="python-api/">Python API</a><a class="text-link" href="releases/0.1.2/">Review release scope <span aria-hidden="true">→</span></a></div></section>
 </div>

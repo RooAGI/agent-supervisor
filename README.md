@@ -20,7 +20,7 @@ application remains responsible for identity, authentication, authorization,
 and orchestration. Enforcement depends on the operating system and selected
 policy; inspect the execution result and platform capabilities.
 
-The current release is **0.1.1**.
+The current release is **0.1.2**.
 
 ## Who it is for
 
@@ -134,7 +134,7 @@ Add the crate:
 
 ```toml
 [dependencies]
-agent-supervisor = "0.1.1"
+agent-supervisor = "0.1.2"
 ```
 
 
@@ -170,6 +170,21 @@ For default-deny filesystem access, set `filesystem` to
 
 See the [quickstart](docs/quickstart.md), [security model](docs/security-model.md),
 and [API boundaries](docs/api-boundaries.md) for the integration contract.
+
+## Python bindings
+
+Version 0.1.2 adds an async Python binding for bounded one-shot execution and
+output streaming. The source package is in `python/`; it has not been published
+to PyPI yet. Build it from this checkout with maturin:
+
+```bash
+python -m pip install maturin
+cd python
+python -m maturin develop
+```
+
+See the [Python API guide](docs/python-api.md) for capture, streaming,
+cancellation, and platform behavior.
 
 ## Network behavior
 
@@ -222,8 +237,9 @@ behavior, and release notes:
 
 ## Release
 
-See the [0.1.0 release notes](docs/releases/0.1.0.md) for the initial public
-scope, and the [0.1.1 release notes](docs/releases/0.1.1.md) for the separate OpenShell developer adapter and its behavior limits.
+See the [0.1.2 release notes](docs/releases/0.1.2.md) for Python bindings and
+the earlier [0.1.1 notes](docs/releases/0.1.1.md) for the separate OpenShell
+developer adapter and its behavior limits.
 
 ## License
 
