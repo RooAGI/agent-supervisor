@@ -259,7 +259,7 @@ impl ProcessContainer {
                 if std::fs::canonicalize(actual)? != std::fs::canonicalize(expected)? {
                     return Err(io::Error::new(
                         io::ErrorKind::PermissionDenied,
-                        "adopted executable does not match the expected identity",
+                        format!("adopted executable does not match the expected identity (expected {}, actual {})", expected.display(), actual.display()),
                     ));
                 }
             }
@@ -315,7 +315,7 @@ impl ProcessContainer {
             if actual != expected {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
-                    "adopted executable does not match the expected identity",
+                    format!("adopted executable does not match the expected identity (expected {}, actual {})", expected.display(), actual.display()),
                 ));
             }
         }
@@ -1212,7 +1212,7 @@ mod windows_job {
                 if std::fs::canonicalize(actual)? != expected {
                     return Err(io::Error::new(
                         io::ErrorKind::PermissionDenied,
-                        "adopted executable does not match the expected identity",
+                        format!("adopted executable does not match the expected identity (expected {}, actual {})", expected.display(), actual.display()),
                     ));
                 }
             }

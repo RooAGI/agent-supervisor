@@ -358,7 +358,7 @@ mod tests {
     #[test]
     fn append_only_grants_fail_closed() {
         let policy = FilesystemPolicy::new(vec![FilesystemGrant {
-            root: PathBuf::from("/workspace"),
+            root: std::env::temp_dir().join("workspace"),
             access: vec![FilesystemAccess::Append],
         }]);
         assert_eq!(

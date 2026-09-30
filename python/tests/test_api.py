@@ -27,12 +27,13 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
             py_command("import sys; print('out'); print('err', file=sys.stderr)")
         )
 
-        self.assertEqual(result.stdout, b"out\n")
-        self.assertEqual(result.stderr, b"err\n")
+        newline = os.linesep.encode()
+        self.assertEqual(result.stdout, b"out" + newline)
+        self.assertEqual(result.stderr, b"err" + newline)
         self.assertTrue(result.success)
         self.assertEqual(result.termination, "exited")
         self.assertEqual(result.exit_code, 0)
-        self.assertEqual(result.stdout_text("utf-8", "strict"), "out\n")
+        self.assertEqual(result.stdout_text("utf-8", "strict"), "out" + os.linesep)
 
     async def test_nonzero_exit_is_a_result(self):
         result = await run(py_command("raise SystemExit(7)"))
@@ -103,8 +104,9 @@ class StreamTests(unittest.IsolatedAsyncioTestCase):
                 elif event.kind == "exited":
                     result = event.result
 
-        self.assertEqual(bytes(seen["stdout"]), b"one\n")
-        self.assertEqual(bytes(seen["stderr"]), b"two\n")
+        newline = os.linesep.encode()
+        self.assertEqual(bytes(seen["stdout"]), b"one" + newline)
+        self.assertEqual(bytes(seen["stderr"]), b"two" + newline)
         self.assertIsNotNone(result)
         self.assertEqual(result.stdout, bytes(seen["stdout"]))
         self.assertEqual(result.stderr, bytes(seen["stderr"]))
