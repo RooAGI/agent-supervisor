@@ -748,12 +748,13 @@ fn linux_process_is_alive(process_id: u32) -> bool {
 
 #[cfg(target_os = "linux")]
 fn install_parent_death_signal(command: &mut Command) {
+    let parent_process_id = unsafe { libc::getpid() };
     unsafe {
-        command.as_std_mut().pre_exec(|| {
+        command.as_std_mut().pre_exec(move || {
             if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
                 return Err(io::Error::last_os_error());
             }
-            if libc::getppid() != libc::getpid() {
+            if libc::getppid() != parent_process_id {
                 return Err(io::Error::new(
                     io::ErrorKind::Interrupted,
                     "sandbox parent exited before child setup completed",
