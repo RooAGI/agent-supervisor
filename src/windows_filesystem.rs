@@ -512,7 +512,7 @@ struct WindowsSandbox {
 impl WindowsSandbox {
     fn prepare(policy: &FilesystemPolicy) -> io::Result<Self> {
         let id = NEXT_PROFILE.fetch_add(1, Ordering::Relaxed);
-        let name = format!("agent-sandbox-{}-{}", std::process::id(), id);
+        let name = format!("agent-supervisor-{}-{}", std::process::id(), id);
         let profile_name = wide_string(&name)?;
         let sid = create_profile(&profile_name)?;
         let loopback = match LoopbackExemption::enable(sid) {

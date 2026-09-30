@@ -1,6 +1,6 @@
 #![cfg(target_os = "macos")]
 
-use agent_sandbox::{
+use agent_supervisor::{
     EnforcementRequirement, EnvironmentPolicy, ExecutionRequest, ProcessGroup, ResourceLimits,
 };
 use std::os::unix::process::CommandExt;
@@ -12,7 +12,7 @@ fn command() -> ExecutionRequest {
         executable: PathBuf::from("/bin/sh"),
         args: vec!["-c".into(), "sleep 2".into()],
         working_directory: None,
-        policy: agent_sandbox::SandboxPolicy::default(),
+        policy: agent_supervisor::SandboxPolicy::default(),
     }
 }
 

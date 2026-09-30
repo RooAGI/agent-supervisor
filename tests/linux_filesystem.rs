@@ -1,6 +1,6 @@
 #![cfg(target_os = "linux")]
 
-use agent_sandbox::{
+use agent_supervisor::{
     execute, EnforcementRequirement, EnvironmentPolicy, ExecutionRequest, FilesystemAccess,
     FilesystemGrant, FilesystemPolicy, ResourceLimits,
 };
@@ -30,17 +30,17 @@ fn request(script: &str, root: PathBuf) -> ExecutionRequest {
         executable: PathBuf::from("/bin/sh"),
         args: vec!["-c".into(), script.into()],
         working_directory: Some(working_directory),
-        policy: agent_sandbox::SandboxPolicy {
+        policy: agent_supervisor::SandboxPolicy {
             filesystem: Some(FilesystemPolicy::new(grants)),
             enforcement: EnforcementRequirement::Required,
-            ..agent_sandbox::SandboxPolicy::default()
+            ..agent_supervisor::SandboxPolicy::default()
         },
     }
 }
 
 #[tokio::test]
 async fn landlock_allows_granted_tree_and_denies_ungranted_tree() {
-    let base = std::env::temp_dir().join(format!("agent-sandbox-fs-{}", std::process::id()));
+    let base = std::env::temp_dir().join(format!("agent-supervisor-fs-{}", std::process::id()));
     let allowed = base.join("allowed");
     let denied = base.join("denied");
     fs::create_dir_all(&allowed).unwrap();

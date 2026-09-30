@@ -1,6 +1,6 @@
 #![cfg(all(not(target_os = "linux"), not(target_os = "macos"), not(windows)))]
 
-use agent_sandbox::{
+use agent_supervisor::{
     execute, EnforcementRequirement, EnvironmentPolicy, ExecutionRequest, FilesystemPolicy,
     ResourceLimits,
 };
@@ -16,9 +16,9 @@ async fn requested_filesystem_policy_fails_closed_without_native_backend() {
         },
         args: Vec::new(),
         working_directory: None,
-        policy: agent_sandbox::SandboxPolicy {
+        policy: agent_supervisor::SandboxPolicy {
             filesystem: Some(FilesystemPolicy::deny_all()),
-            ..agent_sandbox::SandboxPolicy::default()
+            ..agent_supervisor::SandboxPolicy::default()
         },
     };
 

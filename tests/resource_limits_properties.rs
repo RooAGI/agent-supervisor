@@ -1,4 +1,4 @@
-use agent_sandbox::ResourceLimits;
+use agent_supervisor::ResourceLimits;
 use proptest::prelude::*;
 
 proptest! {

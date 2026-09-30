@@ -1,8 +1,8 @@
-# RooAGI Agent Sandbox
+# RooAGI Agent Supervisor
 
 RELIABLE PROCESS CONTROL FOR AI AGENTS
 
-RooAGI Agent Sandbox is the process boundary your agent runtime can trust: a native,
+RooAGI Agent Supervisor is the process boundary your agent runtime can trust: a native,
 policy-driven supervisor for tools, MCP servers, subprocesses, PTY sessions,
 and pipelines.
 
@@ -15,7 +15,7 @@ The current release is **0.1.0**.
 
 ## Built for every agent builder
 
-RooAGI Agent Sandbox is for teams building:
+RooAGI Agent Supervisor is for teams building:
 
 - agent frameworks that need one process boundary across operating systems;
 - MCP servers and tool adapters that must be bounded and cleaned up reliably;
@@ -37,7 +37,7 @@ or fail to clean up after cancellation. A runtime needs one consistent process
 boundary across Linux, macOS, and Windows without turning every tool adapter
 into an operating-system integration.
 
-RooAGI Agent Sandbox provides that boundary. It makes execution policy explicit,
+RooAGI Agent Supervisor provides that boundary. It makes execution policy explicit,
 keeps process ownership with a supervisor, and returns structured receipts and
 errors that an agent runtime can record or act on.
 
@@ -70,7 +70,7 @@ semantics:
 ## Architecture
 
 ```text
-agent runtime → authorized ExecutionRequest → agent-sandbox → child process
+agent runtime → authorized ExecutionRequest → agent-supervisor → child process
 ```
 
 The runtime owns:
@@ -120,13 +120,13 @@ Add the crate:
 
 ```toml
 [dependencies]
-agent-sandbox = "0.1.0"
+agent-supervisor = "0.1.0"
 ```
 
 Create an explicit request and execute it:
 
 ```rust
-use agent_sandbox::{
+use agent_supervisor::{
     execute, EnforcementRequirement, EnvironmentPolicy, ExecutionRequest,
     NetworkMode, ResourceLimits, SandboxPolicy,
 };
@@ -203,7 +203,7 @@ The full documentation is published with MkDocs Material and includes the
 quickstart, security model, supervisor lifecycle, process groups, platform
 behavior, and release notes:
 
-<https://rooagi.github.io/AgentSandbox/>
+<https://rooagi.github.io/agent-supervisor/>
 
 ## Release
 
@@ -212,6 +212,6 @@ scope, compatibility notes, and platform limitations.
 
 ## License
 
-RooAGI Agent Sandbox is licensed under the [Apache License, Version 2.0](LICENSE).
+RooAGI Agent Supervisor is licensed under the [Apache License, Version 2.0](LICENSE).
 You may use, modify, and distribute it, including in open-source and
 commercial agent products, subject to the license terms.

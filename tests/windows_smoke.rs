@@ -1,6 +1,6 @@
 #![cfg(windows)]
 
-use agent_sandbox::{
+use agent_supervisor::{
     EnforcementRequirement, EnvironmentPolicy, ExecutionRequest, ProcessGroup, PtyDimensions,
     PtySession, ResourceLimits,
 };
@@ -14,9 +14,9 @@ fn command(args: &[&str]) -> ExecutionRequest {
             .map(str::to_owned)
             .collect(),
         working_directory: None,
-        policy: agent_sandbox::SandboxPolicy {
+        policy: agent_supervisor::SandboxPolicy {
             enforcement: EnforcementRequirement::Required,
-            ..agent_sandbox::SandboxPolicy::default()
+            ..agent_supervisor::SandboxPolicy::default()
         },
     }
 }
@@ -40,7 +40,7 @@ async fn job_object_tracks_and_reaps_a_real_process() {
     let receipt = child.wait().await.unwrap();
     assert!(matches!(
         receipt.termination,
-        agent_sandbox::TerminationReason::Exited { code: Some(0), .. }
+        agent_supervisor::TerminationReason::Exited { code: Some(0), .. }
     ));
 }
 
@@ -73,7 +73,7 @@ fn conpty_session_is_contained_and_reaped() {
     let receipt = session.wait().unwrap();
     assert!(matches!(
         receipt.termination,
-        agent_sandbox::TerminationReason::Exited { code: Some(0), .. }
+        agent_supervisor::TerminationReason::Exited { code: Some(0), .. }
     ));
 }
 
@@ -86,7 +86,7 @@ async fn job_object_applies_cpu_quota() {
     let receipt = child.wait().await.unwrap();
     assert!(matches!(
         receipt.termination,
-        agent_sandbox::TerminationReason::Exited { code: Some(0), .. }
+        agent_supervisor::TerminationReason::Exited { code: Some(0), .. }
     ));
 }
 

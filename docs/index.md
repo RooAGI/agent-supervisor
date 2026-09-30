@@ -7,22 +7,22 @@ hide:
 <div class="landing">
   <section class="landing-hero">
     <div class="landing-hero__copy">
-      <p class="eyebrow"><span class="eyebrow__dot"></span> ROOAGI · AGENT SANDBOX</p>
+      <p class="eyebrow"><span class="eyebrow__dot"></span> ROOAGI · AGENT SUPERVISOR</p>
       <h1>A reliable process boundary for AI agents.</h1>
-      <p class="landing-hero__lede">Your runtime decides what an agent may run. Agent Sandbox supervises how it runs: with explicit policy, native operating-system controls, and cleanup you can count on.</p>
+      <p class="landing-hero__lede">Your runtime decides what an agent may run. Agent Supervisor controls how it runs: with explicit policy, native operating-system controls, and cleanup you can count on.</p>
       <div class="landing-hero__actions">
         <a class="md-button md-button--primary" href="quickstart/">Get started</a>
-        <a class="md-button" href="https://github.com/RooAGI/AgentSandbox">Explore on GitHub <span aria-hidden="true">↗</span></a>
+        <a class="md-button" href="https://github.com/RooAGI/agent-supervisor">Explore on GitHub <span aria-hidden="true">↗</span></a>
       </div>
       <div class="landing-hero__meta"><span>OPEN SOURCE</span><span>RUST</span><span>APACHE 2.0</span></div>
     </div>
 
-    <div class="execution-visual" aria-label="An approved execution request passes through Agent Sandbox and becomes a supervised child process">
+    <div class="execution-visual" aria-label="An approved execution request passes through Agent Supervisor and becomes a supervised child process">
       <div class="execution-visual__top"><span><i></i><i></i><i></i></span><span>EXECUTION FLOW</span><span>01 — 04</span></div>
       <div class="execution-flow">
         <div class="flow-node flow-node--runtime"><span class="flow-node__icon">01</span><div><small>YOUR RUNTIME</small><strong>Authorization</strong></div><b>✓</b></div>
         <div class="flow-link"><span>explicit request</span></div>
-        <div class="flow-node flow-node--sandbox"><span class="flow-node__icon">02</span><div><small>AGENT SANDBOX</small><strong>Policy + supervision</strong></div><b>●</b></div>
+        <div class="flow-node flow-node--sandbox"><span class="flow-node__icon">02</span><div><small>AGENT SUPERVISOR</small><strong>Policy + supervision</strong></div><b>●</b></div>
         <div class="flow-controls"><span>TIME</span><span>OUTPUT</span><span>FILESYSTEM</span><span>RESOURCES</span></div>
         <div class="flow-link"><span>bounded process</span></div>
         <div class="flow-node flow-node--child"><span class="flow-node__icon">03</span><div><small>CHILD PROCESS</small><strong>Tool, MCP server, pipeline</strong></div><b>↗</b></div>
@@ -52,7 +52,7 @@ hide:
   </section>
 
   <section class="workflow-section">
-    <div class="workflow-copy"><p class="eyebrow">A CLEAR CONTRACT</p><h2>From authorized request to structured result.</h2><p>Execution stays legible to the system that owns the agent. The caller declares the policy; Agent Sandbox enforces and supervises the process; the runtime receives the outcome.</p><a class="text-link" href="api-boundaries/">Understand the API boundary <span aria-hidden="true">→</span></a></div>
+    <div class="workflow-copy"><p class="eyebrow">A CLEAR CONTRACT</p><h2>From authorized request to structured result.</h2><p>Execution stays legible to the system that owns the agent. The caller declares the policy; Agent Supervisor enforces and supervises the process; the runtime receives the outcome.</p><a class="text-link" href="api-boundaries/">Understand the API boundary <span aria-hidden="true">→</span></a></div>
     <div class="workflow-steps" role="list" aria-label="Execution lifecycle">
       <div role="listitem"><span>01</span><strong>Declare</strong><small>Executable · policy · limits</small></div>
       <div role="listitem"><span>02</span><strong>Launch</strong><small>Platform backend applies controls</small></div>
@@ -66,7 +66,7 @@ hide:
     <div class="platform-list"><div><span>01</span><strong>Tool adapters</strong><small>Bound commands, inputs, and output</small></div><div><span>02</span><strong>MCP servers</strong><small>Manage long-lived child processes</small></div><div><span>03</span><strong>Agent platforms</strong><small>Inspect identity, events, and resources</small></div><div><span>04</span><strong>Desktop and CLI agents</strong><small>Support PTYs, cancellation, and cleanup</small></div></div>
   </section>
 
-  <aside class="boundary-note"><span class="boundary-note__mark">i</span><div><strong>A process sandbox, with a clear security boundary.</strong><p>Agent Sandbox is not a complete container runtime. The caller must authenticate and authorize each request. Read the <a href="security-model/">security model</a> before relying on an enforcement feature.</p></div></aside>
+  <aside class="boundary-note"><span class="boundary-note__mark">i</span><div><strong>A process supervisor, with a clear security boundary.</strong><p>Agent Supervisor is not a complete container runtime. The caller must authenticate and authorize each request. Read the <a href="security-model/">security model</a> before relying on an enforcement feature.</p></div></aside>
 
-  <section class="final-cta"><p class="eyebrow">AGENT SANDBOX · 0.1.0</p><h2>Make every tool run easier to trust.</h2><p>Start with the Rust quickstart, then choose the controls your runtime needs.</p><div><a class="md-button md-button--primary" href="quickstart/">Read the quickstart</a><a class="text-link" href="releases/0.1.0/">Review release scope <span aria-hidden="true">→</span></a></div></section>
+  <section class="final-cta"><p class="eyebrow">AGENT SUPERVISOR · 0.1.0</p><h2>Make every tool run easier to trust.</h2><p>Start with the Rust quickstart, then choose the controls your runtime needs.</p><div><a class="md-button md-button--primary" href="quickstart/">Read the quickstart</a><a class="text-link" href="releases/0.1.0/">Review release scope <span aria-hidden="true">→</span></a></div></section>
 </div>

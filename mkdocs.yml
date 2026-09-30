@@ -1,8 +1,8 @@
-site_name: RooAGI Agent Sandbox
+site_name: RooAGI Agent Supervisor
 site_description: Policy-driven process isolation and supervision for agent runtimes.
-site_url: https://rooagi.github.io/AgentSandbox/
-repo_url: https://github.com/RooAGI/AgentSandbox
-repo_name: RooAGI/AgentSandbox
+site_url: https://rooagi.github.io/agent-supervisor/
+repo_url: https://github.com/RooAGI/agent-supervisor
+repo_name: RooAGI/agent-supervisor
 edit_uri: edit/main/docs/
 
 theme:
@@ -72,7 +72,7 @@ extra:
   generator: false
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/RooAGI/AgentSandbox
-      name: RooAGI Agent Sandbox on GitHub
+      link: https://github.com/RooAGI/agent-supervisor
+      name: RooAGI Agent Supervisor on GitHub
 
 copyright: Apache-2.0 licensed · Built by <a href="https://www.rooagi.com">RooAGI</a>

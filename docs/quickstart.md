@@ -4,7 +4,7 @@
 
 ```toml
 [dependencies]
-agent-sandbox = "0.1.0"
+agent-supervisor = "0.1.0"
 ```
 
 ## Build an execution request
@@ -14,7 +14,7 @@ network mode, resource limits, and enforcement requirement. The sandbox does
 not infer missing authority.
 
 ```rust
-use agent_sandbox::{
+use agent_supervisor::{
     execute, EnforcementRequirement, EnvironmentPolicy, ExecutionRequest,
     NetworkMode, ResourceLimits, SandboxPolicy,
 };

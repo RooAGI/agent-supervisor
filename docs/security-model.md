@@ -1,6 +1,6 @@
 # Security model
 
-`agent-sandbox` is a process boundary, not a complete container runtime. Its
+`agent-supervisor` is a process boundary, not a complete container runtime. Its
 security properties come from explicit policy plus native operating-system
 enforcement.
 

@@ -1,6 +1,6 @@
 #![cfg(windows)]
 
-use agent_sandbox::{
+use agent_supervisor::{
     execute, EnforcementRequirement, EnvironmentPolicy, ExecutionRequest, FilesystemAccess,
     FilesystemGrant, FilesystemPolicy, ResourceLimits,
 };
@@ -16,7 +16,7 @@ fn request(args: Vec<String>, policy: FilesystemPolicy) -> ExecutionRequest {
     ExecutionRequest {
         executable: PathBuf::from(windir).join("System32").join("cmd.exe"),
         args,
-        policy: agent_sandbox::SandboxPolicy {
+        policy: agent_supervisor::SandboxPolicy {
             environment: EnvironmentPolicy {
                 inherit: ["SystemRoot", "ComSpec"]
                     .into_iter()
@@ -28,7 +28,7 @@ fn request(args: Vec<String>, policy: FilesystemPolicy) -> ExecutionRequest {
             working_directory: None,
             filesystem: Some(policy),
             enforcement: EnforcementRequirement::Required,
-            ..agent_sandbox::SandboxPolicy::default()
+            ..agent_supervisor::SandboxPolicy::default()
         },
     }
 }

@@ -1,6 +1,6 @@
 #![cfg(target_os = "macos")]
 
-use agent_sandbox::{
+use agent_supervisor::{
     execute, EnforcementRequirement, EnvironmentPolicy, ExecutionRequest, FilesystemAccess,
     FilesystemGrant, FilesystemPolicy, ResourceLimits,
 };
@@ -16,7 +16,7 @@ fn request(script: &str, root: PathBuf) -> ExecutionRequest {
         executable: PathBuf::from("/bin/sh"),
         args: vec!["-c".into(), script.into()],
         working_directory: Some(root.clone()),
-        policy: agent_sandbox::SandboxPolicy {
+        policy: agent_supervisor::SandboxPolicy {
             environment: EnvironmentPolicy::default(),
             filesystem: Some(FilesystemPolicy::new(vec![
                 FilesystemGrant {
@@ -51,7 +51,7 @@ fn request(script: &str, root: PathBuf) -> ExecutionRequest {
                     access: vec![FilesystemAccess::Read],
                 },
             ])),
-            ..agent_sandbox::SandboxPolicy::default()
+            ..agent_supervisor::SandboxPolicy::default()
         },
     }
 }
@@ -60,7 +60,7 @@ fn request(script: &str, root: PathBuf) -> ExecutionRequest {
 async fn seatbelt_allows_granted_tree_and_denies_ungranted_tree() {
     let base = fs::canonicalize(std::env::temp_dir())
         .unwrap()
-        .join(format!("agent-sandbox-macos-fs-{}", std::process::id()));
+        .join(format!("agent-supervisor-macos-fs-{}", std::process::id()));
     let allowed = base.join("allowed");
     let denied = base.join("denied");
     fs::create_dir_all(&allowed).unwrap();
