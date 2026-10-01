@@ -84,9 +84,9 @@ impl WindowsChild {
         container: &ProcessContainer,
     ) -> io::Result<Self> {
         let sandbox = WindowsSandbox::prepare(policy)?;
-        let (stdin_parent, stdin_child) = pipe()?;
-        let (stdout_child, stdout_parent) = pipe()?;
-        let (stderr_child, stderr_parent) = pipe()?;
+        let (stdin_child, stdin_parent) = pipe()?;
+        let (stdout_parent, stdout_child) = pipe()?;
+        let (stderr_parent, stderr_child) = pipe()?;
         for handle in [stdin_parent, stdout_parent, stderr_parent] {
             if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } == 0 {
                 close_handle(stdin_parent);
