@@ -55,8 +55,9 @@ fn request(
 #[tokio::test]
 async fn appcontainer_enforces_read_and_write_grants() {
     let directory = tempfile::tempdir().expect("temporary directory");
+    let denied_directory = tempfile::tempdir().expect("denied temporary directory");
     let allowed = directory.path().join("allowed.txt");
-    let denied = directory.path().join("denied.txt");
+    let denied = denied_directory.path().join("denied.txt");
     std::fs::write(&allowed, "allowed\r\n").expect("allowed file");
     std::fs::write(&denied, "secret\r\n").expect("denied file");
 
@@ -108,13 +109,10 @@ async fn appcontainer_enforces_read_and_write_grants() {
         &request(
             vec!["/C".into(), "type".into(), denied.display().to_string()],
             FilesystemPolicy::new(vec![FilesystemGrant {
-                root: PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"))
-                    .join("System32"),
+                root: directory.path().to_path_buf(),
                 access: vec![FilesystemAccess::Read],
             }]),
-            Some(
-                PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot")).join("System32"),
-            ),
+            Some(directory.path().to_path_buf()),
         ),
         b"",
     )
@@ -125,6 +123,7 @@ async fn appcontainer_enforces_read_and_write_grants() {
 
 #[tokio::test]
 async fn filesystem_sandbox_preserves_host_network_loopback() {
+    let directory = tempfile::tempdir().expect("temporary working directory");
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("loopback listener");
     let port = listener.local_addr().expect("listener address").port();
     listener
@@ -163,13 +162,10 @@ async fn filesystem_sandbox_preserves_host_network_loopback() {
         &request(
             vec!["/C".into(), command],
             FilesystemPolicy::new(vec![FilesystemGrant {
-                root: PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"))
-                    .join("System32"),
+                root: directory.path().to_path_buf(),
                 access: vec![FilesystemAccess::Read],
             }]),
-            Some(
-                PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot")).join("System32"),
-            ),
+            Some(directory.path().to_path_buf()),
         ),
         b"",
     )
