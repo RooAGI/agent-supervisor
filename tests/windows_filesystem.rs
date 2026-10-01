@@ -19,10 +19,25 @@ fn request(args: Vec<String>, policy: FilesystemPolicy) -> ExecutionRequest {
         working_directory: None,
         policy: agent_supervisor::SandboxPolicy {
             environment: EnvironmentPolicy {
-                inherit: ["SystemRoot", "WINDIR", "ComSpec", "PATH"]
-                    .into_iter()
-                    .map(str::to_owned)
-                    .collect(),
+                inherit: [
+                    "SystemRoot",
+                    "WINDIR",
+                    "ComSpec",
+                    "PATH",
+                    "PATHEXT",
+                    "TEMP",
+                    "TMP",
+                    "USERPROFILE",
+                    "HOMEDRIVE",
+                    "HOMEPATH",
+                    "APPDATA",
+                    "LOCALAPPDATA",
+                    "ProgramData",
+                    "ALLUSERSPROFILE",
+                ]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
                 variables: BTreeMap::new(),
                 executable_search_paths: Vec::new(),
             },
