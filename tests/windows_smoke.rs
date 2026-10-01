@@ -54,7 +54,9 @@ async fn job_object_tracks_and_reaps_a_real_process() {
 
 #[test]
 fn conpty_session_is_contained_and_reaped() {
-    let session_request = command(&["echo hello & exit 0"]);
+    let mut session_request = command(&[]);
+    session_request.executable = PathBuf::from(r"C:\Windows\System32\whoami.exe");
+    session_request.args.clear();
     let session = PtySession::start(&session_request, PtyDimensions::default()).unwrap();
     // ConPTY's blocking reader may remain open after the child exits. Test
     // lifecycle and containment here; PTY output is covered by the Unix PTY
