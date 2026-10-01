@@ -85,12 +85,19 @@ impl PtySession {
             .openpty(to_pty_size(dimensions))
             .map_err(|error| SandboxError::spawn(std::io::Error::other(error.to_string())))?;
 
-        let mut command = CommandBuilder::new(
+        #[cfg(windows)]
+        let executable = crate::windows_filesystem::create_process_path(
             identity
                 .canonical_path
                 .as_ref()
                 .expect("native path resolved"),
         );
+        #[cfg(not(windows))]
+        let executable = identity
+            .canonical_path
+            .as_ref()
+            .expect("native path resolved");
+        let mut command = CommandBuilder::new(executable);
         command.args(&request.args);
         command.env_clear();
         for name in &request.policy.environment.inherit {
