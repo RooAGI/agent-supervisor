@@ -55,18 +55,17 @@ async fn job_object_tracks_and_reaps_a_real_process() {
 #[test]
 fn conpty_session_is_contained_and_reaped() {
     let mut session_request = command(&[]);
-    session_request.executable = PathBuf::from(r"C:\Windows\System32\whoami.exe");
+    session_request.executable = PathBuf::from(r"C:\Windows\System32\cmd.exe");
     session_request.args.clear();
     let session = PtySession::start(&session_request, PtyDimensions::default()).unwrap();
-    // ConPTY's blocking reader may remain open after the child exits. Test
-    // lifecycle and containment here; PTY output is covered by the Unix PTY
-    // tests, where the reader has EOF semantics.
+    // An interactive shell remains open by design. Bound its lifetime and
+    // verify that the timeout path terminates and reaps the contained child.
     let receipt = session
-        .wait_timeout(std::time::Duration::from_secs(5))
+        .wait_timeout(std::time::Duration::from_millis(500))
         .unwrap();
     assert!(matches!(
         receipt.termination,
-        agent_supervisor::TerminationReason::Exited { code: Some(0), .. }
+        agent_supervisor::TerminationReason::TimedOut
     ));
 }
 
