@@ -256,10 +256,16 @@ impl ProcessContainer {
                             "cannot verify adopted executable identity",
                         )
                     })?;
-                if std::fs::canonicalize(actual)? != std::fs::canonicalize(expected)? {
+                let expected = std::fs::canonicalize(expected)?;
+                let actual = std::fs::canonicalize(actual)?;
+                if actual.as_path() != expected.as_path() {
                     return Err(io::Error::new(
                         io::ErrorKind::PermissionDenied,
-                        format!("adopted executable does not match the expected identity (expected {}, actual {})", expected.display(), actual.display()),
+                        format!(
+                            "adopted executable does not match the expected identity (expected {}, actual {})",
+                            expected.display(),
+                            actual.display()
+                        ),
                     ));
                 }
             }
@@ -312,10 +318,14 @@ impl ProcessContainer {
         if let Some(expected) = expected_executable {
             let expected = std::fs::canonicalize(expected)?;
             let actual = std::fs::canonicalize(proc_dir.join("exe"))?;
-            if actual != expected {
+            if actual.as_path() != expected.as_path() {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
-                    format!("adopted executable does not match the expected identity (expected {}, actual {})", expected.display(), actual.display()),
+                    format!(
+                        "adopted executable does not match the expected identity (expected {}, actual {})",
+                        expected.display(),
+                        actual.display()
+                    ),
                 ));
             }
         }
@@ -1209,10 +1219,15 @@ mod windows_job {
                         "cannot verify adopted executable identity",
                     )
                 })?;
-                if std::fs::canonicalize(actual)? != expected {
+                let actual = std::fs::canonicalize(&actual)?;
+                if actual.as_path() != expected.as_path() {
                     return Err(io::Error::new(
                         io::ErrorKind::PermissionDenied,
-                        format!("adopted executable does not match the expected identity (expected {}, actual {})", expected.display(), actual.display()),
+                        format!(
+                        "adopted executable does not match the expected identity (expected {}, actual {})",
+                        expected.display(),
+                        actual.display()
+                    ),
                     ));
                 }
             }

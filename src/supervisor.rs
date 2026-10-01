@@ -1394,7 +1394,13 @@ mod tests {
             }
         ));
         #[cfg(target_os = "linux")]
-        assert!(!group.is_alive());
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while group.is_alive() {
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("terminated process group should become inactive");
     }
 
     #[tokio::test]
