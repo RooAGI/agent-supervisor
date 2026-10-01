@@ -162,15 +162,16 @@ impl WindowsChild {
             close_handle(process_info.hThread);
             return Err(io::Error::last_os_error());
         }
-        unsafe { CloseHandle(process_info.hThread) };
-
-        if let Err(error) = container
-            .attach_native_process(process_info.hProcess as usize, process_info.dwProcessId)
-        {
+        if let Err(error) = container.attach_native_process(
+            process_info.hProcess as usize,
+            process_info.hThread as usize,
+        ) {
             unsafe { TerminateProcess(process_info.hProcess, 1) };
             unsafe { CloseHandle(process_info.hProcess) };
+            unsafe { CloseHandle(process_info.hThread) };
             return Err(error);
         }
+        unsafe { CloseHandle(process_info.hThread) };
 
         Ok(Self {
             process: process_info.hProcess,

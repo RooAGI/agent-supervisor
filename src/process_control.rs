@@ -176,9 +176,10 @@ impl ProcessContainer {
     pub(crate) fn attach_native_process(
         &self,
         process_handle: usize,
-        process_id: u32,
+        primary_thread_handle: usize,
     ) -> io::Result<()> {
-        self.job.attach_native_process(process_handle, process_id)
+        self.job
+            .attach_native_process(process_handle, primary_thread_handle)
     }
 
     pub(crate) fn set_process_id(&self, process_id: Option<u32>) -> io::Result<()> {
@@ -1166,14 +1167,18 @@ mod windows_job {
         pub(super) fn attach_native_process(
             &self,
             process_handle: usize,
-            process_id: u32,
+            primary_thread_handle: usize,
         ) -> io::Result<()> {
             let process = process_handle as HANDLE;
             let ok = unsafe { AssignProcessToJobObject(self.handle, process) };
             if ok == 0 {
                 return Err(io::Error::last_os_error());
             }
-            resume_process_threads(process_id)
+            let resumed = unsafe { ResumeThread(primary_thread_handle as HANDLE) };
+            if resumed == u32::MAX {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
         }
 
         pub(super) fn attach_process_id(&self, process_id: u32) -> io::Result<()> {
