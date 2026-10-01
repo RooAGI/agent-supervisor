@@ -17,8 +17,22 @@ fn request(
     working_directory: Option<PathBuf>,
 ) -> ExecutionRequest {
     let windir = std::env::var_os("WINDIR").expect("WINDIR");
+    request_for(
+        PathBuf::from(windir).join("System32").join("cmd.exe"),
+        args,
+        policy,
+        working_directory,
+    )
+}
+
+fn request_for(
+    executable: PathBuf,
+    args: Vec<String>,
+    filesystem: FilesystemPolicy,
+    working_directory: Option<PathBuf>,
+) -> ExecutionRequest {
     ExecutionRequest {
-        executable: PathBuf::from(windir).join("System32").join("cmd.exe"),
+        executable,
         args,
         working_directory,
         policy: agent_supervisor::SandboxPolicy {
@@ -45,7 +59,7 @@ fn request(
                 variables: BTreeMap::new(),
                 executable_search_paths: Vec::new(),
             },
-            filesystem: Some(policy),
+            filesystem: Some(filesystem),
             enforcement: EnforcementRequirement::Required,
             ..agent_supervisor::SandboxPolicy::default()
         },
@@ -154,15 +168,16 @@ async fn filesystem_sandbox_preserves_host_network_loopback() {
 
     let windir = std::env::var_os("WINDIR").expect("WINDIR");
     let curl = PathBuf::from(windir).join("System32").join("curl.exe");
-    // System32 has no spaces in its standard Windows path, so omit quotes:
-    // `cmd /C` otherwise treats the leading quote as part of the executable.
-    let command = format!(
-        "{} --silent --show-error --connect-timeout 3 http://127.0.0.1:{port}",
-        curl.display()
-    );
     let output = execute(
-        &request(
-            vec!["/C".into(), command],
+        &request_for(
+            curl,
+            vec![
+                "--silent".into(),
+                "--show-error".into(),
+                "--connect-timeout".into(),
+                "3".into(),
+                format!("http://127.0.0.1:{port}"),
+            ],
             FilesystemPolicy::new(vec![FilesystemGrant {
                 root: directory.path().to_path_buf(),
                 access: vec![FilesystemAccess::Read],
