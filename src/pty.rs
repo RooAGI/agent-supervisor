@@ -108,6 +108,22 @@ impl PtySession {
         for (name, value) in &request.policy.environment.variables {
             command.env(name, value);
         }
+        // `portable-pty` builds a fresh Windows environment block. Preserve
+        // the drive's current-directory pseudo-variable required by
+        // CreateProcessW, while leaving it outside the user's allowlist.
+        #[cfg(windows)]
+        {
+            let current_directory = request
+                .working_directory
+                .clone()
+                .or_else(|| std::env::current_dir().ok());
+            if let Some(directory) = current_directory {
+                let path = directory.as_os_str().to_string_lossy();
+                if let Some(drive) = path.get(..2).filter(|value| value.ends_with(':')) {
+                    command.env(format!("={drive}"), directory);
+                }
+            }
+        }
         if let Some(directory) = &request.working_directory {
             command.cwd(directory);
         }

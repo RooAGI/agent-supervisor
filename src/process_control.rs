@@ -1300,8 +1300,14 @@ mod windows_job {
                 let listed = unsafe { *(buffer.as_ptr().cast::<u32>().add(1)) } as usize;
                 if ok != 0 {
                     let count = listed.min(capacity);
+                    // JOBOBJECT_BASIC_PROCESS_ID_LIST has two DWORD header
+                    // fields (8 bytes) followed immediately by ULONG_PTR IDs.
+                    // The usize buffer keeps the allocation aligned, but its
+                    // first PID is at byte offset 8, not at usize index 2.
+                    let process_ids =
+                        unsafe { buffer.as_ptr().cast::<u8>().add(8).cast::<usize>() };
                     break (0..count)
-                        .map(|index| unsafe { *buffer.as_ptr().add(2 + index) as u32 })
+                        .map(|index| unsafe { *process_ids.add(index) as u32 })
                         .collect::<Vec<_>>();
                 }
                 if assigned <= capacity || capacity >= 65_536 {
