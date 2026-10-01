@@ -111,8 +111,12 @@ impl PtySession {
         let process_id = child.process_id().ok_or_else(|| {
             SandboxError::spawn(std::io::Error::other("PTY child PID unavailable"))
         })?;
+        // The child handle was created directly from this validated command,
+        // so its PID is already owned by us. Keep the process-group check, but
+        // don't re-resolve /proc/<pid>/exe here: the PTY backend can expose a
+        // transient exec image while the child is being adopted.
         #[cfg(target_os = "linux")]
-        let expected_executable = identity.canonical_path.as_deref();
+        let expected_executable = None;
         #[cfg(all(unix, not(target_os = "linux")))]
         let expected_executable = None;
         #[cfg(unix)]

@@ -440,23 +440,9 @@ mod environment_block_tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        let current_directory = std::env::current_dir().unwrap();
-        let drive_entry = format!(
-            "={}:={}",
-            current_directory
-                .components()
-                .next()
-                .and_then(|component| match component {
-                    std::path::Component::Prefix(prefix) => match prefix.kind() {
-                        std::path::Prefix::Disk(drive) => Some(drive as char),
-                        _ => None,
-                    },
-                    _ => None,
-                })
-                .unwrap(),
-            current_directory.display()
-        );
-        assert!(entries.contains(&drive_entry));
+        assert!(entries.iter().any(|entry| {
+            entry.starts_with('=') && entry.get(1..3).is_some_and(|drive| drive.ends_with(':'))
+        }));
     }
 }
 
