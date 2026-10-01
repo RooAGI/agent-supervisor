@@ -483,7 +483,7 @@ fn spawn_internal(
         .canonical_path
         .as_ref()
         .expect("native path resolved");
-    let mut command = Command::new(&executable);
+    let mut command = Command::new(executable);
     command.args(&request.args);
     if let Some(policy) = &request.policy.filesystem {
         crate::filesystem::wrap_command(&mut command, policy, request.policy.network)
