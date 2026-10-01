@@ -913,8 +913,11 @@ pub async fn execute_with_cancellation(
                         forced_termination = Some(TerminationReason::StderrLimitExceeded);
                         break;
                     }
-                    StreamEvent::ReadFailed(error) => {
-                        return Err(SandboxError::execution(error).with_executable(identity.clone()))
+                    StreamEvent::ReadFailed(StreamKind::Stdout, error) => {
+                        return Err(SandboxError::stdout_read(error).with_executable(identity.clone()))
+                    }
+                    StreamEvent::ReadFailed(StreamKind::Stderr, error) => {
+                        return Err(SandboxError::stderr_read(error).with_executable(identity.clone()))
                     }
                 }
             }
@@ -933,7 +936,7 @@ pub async fn execute_with_cancellation(
                 | StreamEvent::Limit(StreamKind::Stdout, bytes) => stdout = Some(bytes),
                 StreamEvent::Complete(StreamKind::Stderr, bytes)
                 | StreamEvent::Limit(StreamKind::Stderr, bytes) => stderr = Some(bytes),
-                StreamEvent::ReadFailed(_) => break,
+                StreamEvent::ReadFailed(_, _) => break,
             }
         }
     }
@@ -1157,7 +1160,7 @@ enum StreamKind {
 enum StreamEvent {
     Complete(StreamKind, Vec<u8>),
     Limit(StreamKind, Vec<u8>),
-    ReadFailed(std::io::Error),
+    ReadFailed(StreamKind, std::io::Error),
 }
 
 fn spawn_bounded_reader(
@@ -1185,7 +1188,7 @@ fn spawn_bounded_reader(
                     return;
                 }
                 Err(error) => {
-                    let _ = events.send(StreamEvent::ReadFailed(error)).await;
+                    let _ = events.send(StreamEvent::ReadFailed(kind, error)).await;
                     return;
                 }
             }

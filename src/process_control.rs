@@ -1172,11 +1172,17 @@ mod windows_job {
             let process = process_handle as HANDLE;
             let ok = unsafe { AssignProcessToJobObject(self.handle, process) };
             if ok == 0 {
-                return Err(io::Error::last_os_error());
+                return Err(native_context(
+                    "AssignProcessToJobObject failed",
+                    io::Error::last_os_error(),
+                ));
             }
             let resumed = unsafe { ResumeThread(primary_thread_handle as HANDLE) };
             if resumed == u32::MAX {
-                return Err(io::Error::last_os_error());
+                return Err(native_context(
+                    "ResumeThread on CreateProcessW handle failed",
+                    io::Error::last_os_error(),
+                ));
             }
             Ok(())
         }
@@ -1473,6 +1479,13 @@ mod windows_job {
             return Err(io::Error::other("child primary thread was not found"));
         }
         result
+    }
+
+    fn native_context(context: &str, error: io::Error) -> io::Error {
+        io::Error::new(
+            error.kind(),
+            format!("{context} (OS error {:?}): {error}", error.raw_os_error()),
+        )
     }
 }
 
