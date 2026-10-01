@@ -64,9 +64,13 @@ fn build_filter() -> io::Result<seccompiler::BpfProgram> {
     )
     .map_err(|error| io::Error::other(error.to_string()))?])
     .map_err(|error| io::Error::other(error.to_string()))?;
+    #[allow(clippy::unnecessary_cast)]
+    let socket_syscall = libc::SYS_socket as i64;
+    #[allow(clippy::unnecessary_cast)]
+    let socketpair_syscall = libc::SYS_socketpair as i64;
     let rules = BTreeMap::from([
-        (i64::from(libc::SYS_socket), vec![non_local_family.clone()]),
-        (i64::from(libc::SYS_socketpair), vec![non_local_family]),
+        (socket_syscall, vec![non_local_family.clone()]),
+        (socketpair_syscall, vec![non_local_family]),
     ]);
     let arch: TargetArch = std::env::consts::ARCH
         .try_into()

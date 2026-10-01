@@ -15,7 +15,7 @@ use crate::supervisor::ChildStatus;
 use std::ffi::{c_void, OsStr, OsString};
 use std::io;
 use std::mem::{size_of, zeroed};
-use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::FromRawHandle;
 use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
@@ -42,7 +42,6 @@ use windows_sys::Win32::Security::{
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_TRAVERSE,
 };
-use windows_sys::Win32::System::Environment::{FreeEnvironmentStringsW, GetEnvironmentStringsW};
 use windows_sys::Win32::System::Memory::{GetProcessHeap, HeapFree};
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
@@ -346,7 +345,18 @@ fn environment_block(
                 .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid PATH"))?,
         ));
     }
-    entries.extend(drive_environment_entries(working_directory)?);
+    let directory = match working_directory {
+        Some(directory) => directory.to_path_buf(),
+        None => std::env::current_dir()?,
+    };
+    if let Some(std::path::Component::Prefix(prefix)) = directory.components().next() {
+        if let std::path::Prefix::Disk(drive) = prefix.kind() {
+            entries.push((
+                OsString::from(format!("={}:", drive as char)),
+                directory.as_os_str().to_owned(),
+            ));
+        }
+    }
     // Windows requires Unicode environment blocks to be sorted by variable
     // name (case-insensitively). CreateProcess may reject unsorted blocks with
     // ERROR_ENVVAR_NOT_FOUND (203).
@@ -364,53 +374,6 @@ fn environment_block(
     }
     block.push(0);
     Ok(block)
-}
-
-fn drive_environment_entries(
-    working_directory: Option<&Path>,
-) -> io::Result<Vec<(OsString, OsString)>> {
-    let mut entries = Vec::new();
-    let environment = unsafe { GetEnvironmentStringsW() };
-    if environment.is_null() {
-        return Err(io::Error::last_os_error());
-    }
-
-    let result = unsafe {
-        let mut cursor = environment;
-        while *cursor != 0 {
-            let mut length = 0;
-            while *cursor.add(length) != 0 {
-                length += 1;
-            }
-            let entry = std::slice::from_raw_parts(cursor, length);
-            if entry.first() == Some(&(b'=' as u16)) {
-                if let Some(separator) =
-                    entry.iter().skip(1).position(|value| *value == b'=' as u16)
-                {
-                    let separator = separator + 1;
-                    entries.push((
-                        OsString::from_wide(&entry[..separator]),
-                        OsString::from_wide(&entry[separator + 1..]),
-                    ));
-                }
-            }
-            cursor = cursor.add(length + 1);
-        }
-        Ok::<_, io::Error>(())
-    };
-    unsafe { FreeEnvironmentStringsW(environment) };
-    result?;
-
-    if let Some(directory) = working_directory {
-        if let Some(std::path::Component::Prefix(prefix)) = directory.components().next() {
-            if let std::path::Prefix::Disk(drive) = prefix.kind() {
-                let name = OsString::from(format!("={}:", drive as char));
-                entries.retain(|(existing, _)| !existing.eq_ignore_ascii_case(&name));
-                entries.push((name, directory.as_os_str().to_owned()));
-            }
-        }
-    }
-    Ok(entries)
 }
 
 #[cfg(test)]
