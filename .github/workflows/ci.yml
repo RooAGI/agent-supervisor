@@ -40,6 +40,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo fmt --check
       - run: cargo test --all-targets -- --test-threads=1
+        timeout-minutes: 5
       - name: Run platform network integration test
         if: runner.os == 'Windows'
         run: cargo test --test windows_filesystem -- --test-threads=1
