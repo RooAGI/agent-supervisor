@@ -117,8 +117,9 @@ impl WindowsChild {
         attributes.set_security_capabilities(&mut capabilities)?;
         startup.lpAttributeList = attributes.list;
 
-        let application = wide_path(executable)?;
-        let mut command_line = command_line(executable, args)?;
+        let executable = create_process_path(executable);
+        let application = wide_path(&executable)?;
+        let mut command_line = command_line(&executable, args)?;
         // A null directory tells CreateProcessW to inherit the caller's
         // current directory. This also avoids passing Windows extended paths
         // (`\\?\...`), which CreateProcessW rejects as its current directory.
@@ -295,6 +296,22 @@ fn wide_path(path: &Path) -> io::Result<Vec<u16>> {
     Ok(path.as_os_str().encode_wide().chain(Some(0)).collect())
 }
 
+fn create_process_path(path: &Path) -> PathBuf {
+    let encoded: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let extended_prefix: Vec<u16> = r"\\?\".encode_utf16().collect();
+    let Some(rest) = encoded.as_slice().strip_prefix(extended_prefix.as_slice()) else {
+        return path.to_path_buf();
+    };
+    let unc_prefix: Vec<u16> = "UNC\\".encode_utf16().collect();
+    if let Some(unc_path) = rest.strip_prefix(unc_prefix.as_slice()) {
+        let mut normalized: Vec<u16> = r"\\".encode_utf16().collect();
+        normalized.extend_from_slice(unc_path);
+        PathBuf::from(OsString::from_wide(&normalized))
+    } else {
+        PathBuf::from(OsString::from_wide(rest))
+    }
+}
+
 fn command_line(executable: &Path, args: &[String]) -> io::Result<Vec<u16>> {
     let mut line = quote_argument(executable.as_os_str());
     for arg in args {
@@ -438,6 +455,22 @@ fn add_drive_directory_entry(
 #[cfg(test)]
 mod environment_block_tests {
     use super::*;
+
+    #[test]
+    fn strips_extended_prefix_for_drive_paths_passed_to_create_process() {
+        assert_eq!(
+            create_process_path(Path::new(r"\\?\C:\Windows\System32\cmd.exe")),
+            PathBuf::from(r"C:\Windows\System32\cmd.exe")
+        );
+    }
+
+    #[test]
+    fn converts_extended_unc_paths_passed_to_create_process() {
+        assert_eq!(
+            create_process_path(Path::new(r"\\?\UNC\server\share\tool.exe")),
+            PathBuf::from(r"\\server\share\tool.exe")
+        );
+    }
 
     #[test]
     fn environment_block_entries_are_case_insensitively_sorted() {
