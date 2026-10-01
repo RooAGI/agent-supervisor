@@ -5,7 +5,7 @@ use agent_supervisor::{
     FilesystemGrant, FilesystemPolicy,
 };
 use std::collections::BTreeMap;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::thread;
@@ -148,6 +148,19 @@ async fn filesystem_sandbox_preserves_host_network_loopback() {
         loop {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(3)))
+                        .expect("request read timeout");
+                    let mut request = Vec::new();
+                    let mut chunk = [0u8; 512];
+                    while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        let count = match stream.read(&mut chunk) {
+                            Ok(0) => return false,
+                            Ok(count) => count,
+                            Err(_) => return false,
+                        };
+                        request.extend_from_slice(&chunk[..count]);
+                    }
                     stream
                         .write_all(
                             b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nrooagi",
