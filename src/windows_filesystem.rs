@@ -342,6 +342,14 @@ fn environment_block(policy: &EnvironmentPolicy) -> io::Result<Vec<u16>> {
                 .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid PATH"))?,
         ));
     }
+    // Windows requires Unicode environment blocks to be sorted by variable
+    // name (case-insensitively). CreateProcess may reject unsorted blocks with
+    // ERROR_ENVVAR_NOT_FOUND (203).
+    entries.sort_by(|(left, _), (right, _)| {
+        left.to_string_lossy()
+            .to_lowercase()
+            .cmp(&right.to_string_lossy().to_lowercase())
+    });
     let mut block = Vec::new();
     for (name, value) in entries {
         block.extend(name.encode_wide());
@@ -351,6 +359,36 @@ fn environment_block(policy: &EnvironmentPolicy) -> io::Result<Vec<u16>> {
     }
     block.push(0);
     Ok(block)
+}
+
+#[cfg(test)]
+mod environment_block_tests {
+    use super::*;
+
+    #[test]
+    fn environment_block_entries_are_case_insensitively_sorted() {
+        let policy = EnvironmentPolicy {
+            inherit: ["SystemRoot", "ComSpec", "PATH", "WINDIR"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            ..EnvironmentPolicy::default()
+        };
+        let block = environment_block(&policy).unwrap();
+        let entries = String::from_utf16(&block)
+            .unwrap()
+            .split('\0')
+            .filter(|entry| !entry.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let names = entries
+            .iter()
+            .map(|entry| entry.split('=').next().unwrap().to_lowercase())
+            .collect::<Vec<_>>();
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted);
+    }
 }
 
 struct AttributeList {

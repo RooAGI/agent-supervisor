@@ -322,7 +322,9 @@ impl ProcessContainer {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
                     format!(
-                        "adopted executable does not match the expected identity (expected {}, actual {})",
+                        "adopted executable does not match the expected identity for pid {} (caller pid {}): expected {}, actual {}",
+                        process_id,
+                        std::process::id(),
                         expected.display(),
                         actual.display()
                     ),

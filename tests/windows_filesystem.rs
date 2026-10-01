@@ -19,7 +19,7 @@ fn request(args: Vec<String>, policy: FilesystemPolicy) -> ExecutionRequest {
         working_directory: None,
         policy: agent_supervisor::SandboxPolicy {
             environment: EnvironmentPolicy {
-                inherit: ["SystemRoot", "ComSpec"]
+                inherit: ["SystemRoot", "WINDIR", "ComSpec", "PATH"]
                     .into_iter()
                     .map(str::to_owned)
                     .collect(),
