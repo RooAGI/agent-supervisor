@@ -120,7 +120,7 @@ impl WindowsChild {
         let application = wide_path(executable)?;
         let mut command_line = command_line(executable, args)?;
         let current_directory = cwd.map(wide_path).transpose()?;
-        let mut environment_block = environment_block(environment)?;
+        let mut environment_block = environment_block(environment, cwd)?;
         let mut process_info: PROCESS_INFORMATION = unsafe { zeroed() };
         let flags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT;
         let created = unsafe {
@@ -322,7 +322,10 @@ fn quote_argument(value: &OsStr) -> String {
     output
 }
 
-fn environment_block(policy: &EnvironmentPolicy) -> io::Result<Vec<u16>> {
+fn environment_block(
+    policy: &EnvironmentPolicy,
+    working_directory: Option<&Path>,
+) -> io::Result<Vec<u16>> {
     let mut entries = Vec::new();
     for name in &policy.inherit {
         if let Some(value) = std::env::var_os(name) {
@@ -341,6 +344,22 @@ fn environment_block(policy: &EnvironmentPolicy) -> io::Result<Vec<u16>> {
             std::env::join_paths(&policy.executable_search_paths)
                 .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid PATH"))?,
         ));
+    }
+    // Windows uses pseudo-variables such as `=C:` to preserve the current
+    // directory for each drive. CreateProcess does not add these when a
+    // custom environment block is supplied, and cmd.exe may fail with
+    // ERROR_ENVVAR_NOT_FOUND without the entry for its current drive.
+    let current_directory = match working_directory {
+        Some(directory) => directory.to_path_buf(),
+        None => std::env::current_dir()?,
+    };
+    if let Some(std::path::Component::Prefix(prefix)) = current_directory.components().next() {
+        if let std::path::Prefix::Disk(drive) = prefix.kind() {
+            entries.push((
+                OsString::from(format!("={}:", drive as char)),
+                current_directory.as_os_str().to_owned(),
+            ));
+        }
     }
     // Windows requires Unicode environment blocks to be sorted by variable
     // name (case-insensitively). CreateProcess may reject unsorted blocks with
@@ -374,7 +393,7 @@ mod environment_block_tests {
                 .collect(),
             ..EnvironmentPolicy::default()
         };
-        let block = environment_block(&policy).unwrap();
+        let block = environment_block(&policy, None).unwrap();
         let entries = String::from_utf16(&block)
             .unwrap()
             .split('\0')
@@ -388,6 +407,23 @@ mod environment_block_tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
+        let current_directory = std::env::current_dir().unwrap();
+        let drive_entry = format!(
+            "={}:={}",
+            current_directory
+                .components()
+                .next()
+                .and_then(|component| match component {
+                    std::path::Component::Prefix(prefix) => match prefix.kind() {
+                        std::path::Prefix::Disk(drive) => Some(drive as char),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .unwrap(),
+            current_directory.display()
+        );
+        assert!(entries.contains(&drive_entry));
     }
 }
 

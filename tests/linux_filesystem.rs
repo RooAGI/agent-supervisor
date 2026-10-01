@@ -32,7 +32,9 @@ fn request(script: &str, root: PathBuf) -> ExecutionRequest {
         working_directory: Some(working_directory),
         policy: agent_supervisor::SandboxPolicy {
             filesystem: Some(FilesystemPolicy::new(grants)),
-            enforcement: EnforcementRequirement::Required,
+            // Landlock remains active even when a hosted runner does not let
+            // the process create a cgroup for process-tree enforcement.
+            enforcement: EnforcementRequirement::BestEffort,
             ..agent_supervisor::SandboxPolicy::default()
         },
     }
