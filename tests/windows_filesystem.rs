@@ -154,8 +154,10 @@ async fn filesystem_sandbox_preserves_host_network_loopback() {
 
     let windir = std::env::var_os("WINDIR").expect("WINDIR");
     let curl = PathBuf::from(windir).join("System32").join("curl.exe");
+    // System32 has no spaces in its standard Windows path, so omit quotes:
+    // `cmd /C` otherwise treats the leading quote as part of the executable.
     let command = format!(
-        "\"{}\" --silent --show-error --connect-timeout 3 http://127.0.0.1:{port}",
+        "{} --silent --show-error --connect-timeout 3 http://127.0.0.1:{port}",
         curl.display()
     );
     let output = execute(
