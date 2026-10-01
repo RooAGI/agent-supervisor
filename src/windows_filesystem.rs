@@ -15,7 +15,7 @@ use crate::supervisor::ChildStatus;
 use std::ffi::{c_void, OsStr, OsString};
 use std::io;
 use std::mem::{size_of, zeroed};
-use std::os::windows::ffi::OsStrExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::io::FromRawHandle;
 use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
@@ -40,7 +40,7 @@ use windows_sys::Win32::Security::{
     SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_TRAVERSE,
+    GetFullPathNameW, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_TRAVERSE,
 };
 use windows_sys::Win32::System::Memory::{GetProcessHeap, HeapFree};
 use windows_sys::Win32::System::Pipes::CreatePipe;
@@ -350,13 +350,10 @@ fn environment_block(
         None => std::env::current_dir()?,
     };
     let directory = normalize_drive_path(&directory);
-    if let Some(std::path::Component::Prefix(prefix)) = directory.components().next() {
-        if let std::path::Prefix::Disk(drive) = prefix.kind() {
-            entries.push((
-                OsString::from(format!("={}:", drive as char)),
-                directory.as_os_str().to_owned(),
-            ));
-        }
+    add_drive_directory_entry(&mut entries, &directory, Some(&directory))?;
+    if let Some(system_root) = std::env::var_os("SystemRoot") {
+        let system_root = normalize_drive_path(Path::new(&system_root));
+        add_drive_directory_entry(&mut entries, &system_root, None)?;
     }
     // Windows requires Unicode environment blocks to be sorted by variable
     // name (case-insensitively). CreateProcess may reject unsorted blocks with
@@ -382,6 +379,43 @@ fn normalize_drive_path(path: &Path) -> PathBuf {
         .and_then(|path| path.strip_prefix(r"\\?\"))
         .map(PathBuf::from)
         .unwrap_or_else(|| path.to_path_buf())
+}
+
+fn add_drive_directory_entry(
+    entries: &mut Vec<(OsString, OsString)>,
+    path: &Path,
+    value: Option<&Path>,
+) -> io::Result<()> {
+    let Some(std::path::Component::Prefix(prefix)) = path.components().next() else {
+        return Ok(());
+    };
+    let std::path::Prefix::Disk(drive) = prefix.kind() else {
+        return Ok(());
+    };
+    let name = OsString::from(format!("={}:", drive as char));
+    let directory = match value {
+        Some(value) => value.to_path_buf(),
+        None => {
+            let input = format!("{}:.", drive as char);
+            let input = input.encode_utf16().chain(Some(0)).collect::<Vec<_>>();
+            let mut output = vec![0_u16; 32_768];
+            let length = unsafe {
+                GetFullPathNameW(
+                    input.as_ptr(),
+                    output.len() as u32,
+                    output.as_mut_ptr(),
+                    null_mut(),
+                )
+            };
+            if length == 0 || length as usize >= output.len() {
+                return Err(io::Error::last_os_error());
+            }
+            PathBuf::from(OsString::from_wide(&output[..length as usize]))
+        }
+    };
+    entries.retain(|(existing, _)| !existing.eq_ignore_ascii_case(&name));
+    entries.push((name, directory.into_os_string()));
+    Ok(())
 }
 
 #[cfg(test)]
