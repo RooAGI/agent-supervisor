@@ -65,8 +65,8 @@ fn build_filter() -> io::Result<seccompiler::BpfProgram> {
     .map_err(|error| io::Error::other(error.to_string()))?])
     .map_err(|error| io::Error::other(error.to_string()))?;
     let rules = BTreeMap::from([
-        (libc::SYS_socket as i64, vec![non_local_family.clone()]),
-        (libc::SYS_socketpair as i64, vec![non_local_family]),
+        (i64::from(libc::SYS_socket), vec![non_local_family.clone()]),
+        (i64::from(libc::SYS_socketpair), vec![non_local_family]),
     ]);
     let arch: TargetArch = std::env::consts::ARCH
         .try_into()
