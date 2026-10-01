@@ -244,16 +244,29 @@ fn wait_process(handle: HANDLE, timeout: u32) -> io::Result<ChildStatus> {
         ));
     }
     if result == WAIT_FAILED || result != WAIT_OBJECT_0 {
-        return Err(io::Error::last_os_error());
+        return Err(with_context(
+            "WaitForSingleObject failed",
+            io::Error::last_os_error(),
+        ));
     }
     let mut code = 0u32;
     if unsafe { GetExitCodeProcess(handle, &mut code) } == 0 {
-        return Err(io::Error::last_os_error());
+        return Err(with_context(
+            "GetExitCodeProcess failed",
+            io::Error::last_os_error(),
+        ));
     }
     Ok(ChildStatus {
         code: Some(code as i32),
         signal: None,
     })
+}
+
+fn with_context(context: &str, error: io::Error) -> io::Error {
+    io::Error::new(
+        error.kind(),
+        format!("{context} (OS error {:?}): {error}", error.raw_os_error()),
+    )
 }
 
 fn pipe() -> io::Result<(HANDLE, HANDLE)> {
