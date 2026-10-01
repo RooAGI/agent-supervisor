@@ -1,8 +1,10 @@
 #![cfg(windows)]
 
 use agent_supervisor::{
-    EnforcementRequirement, ExecutionRequest, ProcessGroup, PtyDimensions, PtySession,
+    EnforcementRequirement, EnvironmentPolicy, ExecutionRequest, ProcessGroup, PtyDimensions,
+    PtySession,
 };
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 fn command(args: &[&str]) -> ExecutionRequest {
@@ -14,6 +16,13 @@ fn command(args: &[&str]) -> ExecutionRequest {
             .collect(),
         working_directory: None,
         policy: agent_supervisor::SandboxPolicy {
+            environment: EnvironmentPolicy {
+                inherit: ["SystemRoot", "ComSpec", "PATH", "PATHEXT", "TEMP", "TMP"]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect::<BTreeSet<_>>(),
+                ..EnvironmentPolicy::default()
+            },
             enforcement: EnforcementRequirement::Required,
             ..agent_supervisor::SandboxPolicy::default()
         },
