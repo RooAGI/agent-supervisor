@@ -349,6 +349,7 @@ fn environment_block(
         Some(directory) => directory.to_path_buf(),
         None => std::env::current_dir()?,
     };
+    let directory = normalize_drive_path(&directory);
     if let Some(std::path::Component::Prefix(prefix)) = directory.components().next() {
         if let std::path::Prefix::Disk(drive) = prefix.kind() {
             entries.push((
@@ -374,6 +375,13 @@ fn environment_block(
     }
     block.push(0);
     Ok(block)
+}
+
+fn normalize_drive_path(path: &Path) -> PathBuf {
+    path.to_str()
+        .and_then(|path| path.strip_prefix(r"\\?\"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| path.to_path_buf())
 }
 
 #[cfg(test)]
