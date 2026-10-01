@@ -11,12 +11,16 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
-fn request(args: Vec<String>, policy: FilesystemPolicy) -> ExecutionRequest {
+fn request(
+    args: Vec<String>,
+    policy: FilesystemPolicy,
+    working_directory: Option<PathBuf>,
+) -> ExecutionRequest {
     let windir = std::env::var_os("WINDIR").expect("WINDIR");
     ExecutionRequest {
         executable: PathBuf::from(windir).join("System32").join("cmd.exe"),
         args,
-        working_directory: None,
+        working_directory,
         policy: agent_supervisor::SandboxPolicy {
             environment: EnvironmentPolicy {
                 inherit: [
@@ -63,6 +67,7 @@ async fn appcontainer_enforces_read_and_write_grants() {
                 root: directory.path().to_path_buf(),
                 access: vec![FilesystemAccess::Read],
             }]),
+            Some(directory.path().to_path_buf()),
         ),
         b"",
     )
@@ -82,8 +87,9 @@ async fn appcontainer_enforces_read_and_write_grants() {
             ],
             FilesystemPolicy::new(vec![FilesystemGrant {
                 root: directory.path().to_path_buf(),
-                access: vec![FilesystemAccess::Write],
+                access: vec![FilesystemAccess::Read, FilesystemAccess::Write],
             }]),
+            Some(directory.path().to_path_buf()),
         ),
         b"",
     )
@@ -101,7 +107,14 @@ async fn appcontainer_enforces_read_and_write_grants() {
     let denied_read = execute(
         &request(
             vec!["/C".into(), "type".into(), denied.display().to_string()],
-            FilesystemPolicy::deny_all(),
+            FilesystemPolicy::new(vec![FilesystemGrant {
+                root: PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"))
+                    .join("System32"),
+                access: vec![FilesystemAccess::Read],
+            }]),
+            Some(
+                PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot")).join("System32"),
+            ),
         ),
         b"",
     )
@@ -147,7 +160,17 @@ async fn filesystem_sandbox_preserves_host_network_loopback() {
         curl.display()
     );
     let output = execute(
-        &request(vec!["/C".into(), command], FilesystemPolicy::deny_all()),
+        &request(
+            vec!["/C".into(), command],
+            FilesystemPolicy::new(vec![FilesystemGrant {
+                root: PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"))
+                    .join("System32"),
+                access: vec![FilesystemAccess::Read],
+            }]),
+            Some(
+                PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot")).join("System32"),
+            ),
+        ),
         b"",
     )
     .await

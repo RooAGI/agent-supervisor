@@ -1099,10 +1099,22 @@ pub(crate) fn validate_request(
 }
 
 fn validate_working_directory(request: &ExecutionRequest) -> Result<(), SandboxError> {
-    let Some(working_directory) = request.working_directory.as_ref() else {
+    let Some(filesystem) = request.policy.filesystem.as_ref() else {
         return Ok(());
     };
-    let Some(filesystem) = request.policy.filesystem.as_ref() else {
+    #[cfg(windows)]
+    let inherited_directory;
+    #[cfg(windows)]
+    let working_directory = match request.working_directory.as_ref() {
+        Some(directory) => directory,
+        None => {
+            inherited_directory =
+                std::env::current_dir().map_err(SandboxError::invalid_working_directory)?;
+            &inherited_directory
+        }
+    };
+    #[cfg(not(windows))]
+    let Some(working_directory) = request.working_directory.as_ref() else {
         return Ok(());
     };
     let canonical_directory = std::fs::canonicalize(working_directory)
@@ -1276,6 +1288,15 @@ mod tests {
     async fn rejects_ungranted_working_directory() {
         let mut request = request("/usr/bin/true");
         request.working_directory = Some(std::env::current_dir().unwrap());
+        request.policy.filesystem = Some(crate::FilesystemPolicy::deny_all());
+        let error = execute(&request, b"").await.unwrap_err();
+        assert_eq!(error.code(), "working_directory_not_granted");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn rejects_ungranted_inherited_working_directory() {
+        let mut request = request("C:\\Windows\\System32\\cmd.exe");
         request.policy.filesystem = Some(crate::FilesystemPolicy::deny_all());
         let error = execute(&request, b"").await.unwrap_err();
         assert_eq!(error.code(), "working_directory_not_granted");
