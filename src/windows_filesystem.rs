@@ -461,6 +461,51 @@ mod environment_block_tests {
             entry.starts_with('=') && entry.get(1..3).is_some_and(|drive| drive.ends_with(':'))
         }));
     }
+
+    #[test]
+    fn custom_environment_block_starts_an_unconfined_process() {
+        let system_root = std::env::var_os("SystemRoot").expect("SystemRoot");
+        let executable = PathBuf::from(system_root).join("System32").join("cmd.exe");
+        let policy = EnvironmentPolicy {
+            inherit: ["SystemRoot", "WINDIR", "ComSpec", "PATH"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            ..EnvironmentPolicy::default()
+        };
+        let mut environment = environment_block(&policy, None).expect("environment block");
+        let application = wide_path(&executable).expect("application path");
+        let mut command =
+            command_line(&executable, &["/C".into(), "exit 0".into()]).expect("command line");
+        let directory = wide_path(&std::env::current_dir().expect("current directory"))
+            .expect("working directory");
+        let mut startup: STARTUPINFOEXW = unsafe { zeroed() };
+        startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
+        let mut process: PROCESS_INFORMATION = unsafe { zeroed() };
+
+        let created = unsafe {
+            CreateProcessW(
+                application.as_ptr(),
+                command.as_mut_ptr(),
+                null(),
+                null(),
+                0,
+                CREATE_UNICODE_ENVIRONMENT,
+                environment.as_mut_ptr().cast::<c_void>(),
+                directory.as_ptr(),
+                (&startup as *const STARTUPINFOEXW)
+                    .cast::<windows_sys::Win32::System::Threading::STARTUPINFOW>(),
+                &mut process,
+            )
+        };
+        assert_ne!(created, 0, "CreateProcessW: {}", io::Error::last_os_error());
+        unsafe {
+            CloseHandle(process.hThread);
+        }
+        let status = wait_process(process.hProcess, 10_000).expect("wait for cmd.exe");
+        unsafe { CloseHandle(process.hProcess) };
+        assert_eq!(status.code, Some(0));
+    }
 }
 
 struct AttributeList {
