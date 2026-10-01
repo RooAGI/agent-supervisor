@@ -296,7 +296,7 @@ fn wide_path(path: &Path) -> io::Result<Vec<u16>> {
     Ok(path.as_os_str().encode_wide().chain(Some(0)).collect())
 }
 
-fn create_process_path(path: &Path) -> PathBuf {
+pub(crate) fn create_process_path(path: &Path) -> PathBuf {
     let encoded: Vec<u16> = path.as_os_str().encode_wide().collect();
     let extended_prefix: Vec<u16> = r"\\?\".encode_utf16().collect();
     let Some(rest) = encoded.as_slice().strip_prefix(extended_prefix.as_slice()) else {

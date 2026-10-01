@@ -471,12 +471,19 @@ fn spawn_internal(
     if request.policy.filesystem.is_some() {
         return spawn_windows_internal(request, supervisor, identity);
     }
-    let mut command = Command::new(
+    #[cfg(windows)]
+    let executable = crate::windows_filesystem::create_process_path(
         identity
             .canonical_path
             .as_ref()
             .expect("native path resolved"),
     );
+    #[cfg(not(windows))]
+    let executable = identity
+        .canonical_path
+        .as_ref()
+        .expect("native path resolved");
+    let mut command = Command::new(&executable);
     command.args(&request.args);
     if let Some(policy) = &request.policy.filesystem {
         crate::filesystem::wrap_command(&mut command, policy, request.policy.network)
