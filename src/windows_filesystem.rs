@@ -119,7 +119,19 @@ impl WindowsChild {
 
         let application = wide_path(executable)?;
         let mut command_line = command_line(executable, args)?;
-        let current_directory = cwd.map(wide_path).transpose()?;
+        // Pass an explicit current directory whenever a custom environment
+        // block is supplied. This avoids making CreateProcess infer the
+        // process drive from its caller while also relying on the `=C:`
+        // pseudo-variable preserved in that block.
+        let inherited_directory;
+        let current_directory_path = match cwd {
+            Some(directory) => directory,
+            None => {
+                inherited_directory = std::env::current_dir()?;
+                &inherited_directory
+            }
+        };
+        let current_directory = Some(wide_path(current_directory_path)?);
         let mut environment_block = environment_block(environment, cwd)?;
         let mut process_info: PROCESS_INFORMATION = unsafe { zeroed() };
         let flags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT;
