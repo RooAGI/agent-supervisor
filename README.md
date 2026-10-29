@@ -20,7 +20,7 @@ application remains responsible for identity, authentication, authorization,
 and orchestration. Enforcement depends on the operating system and selected
 policy; inspect the execution result and platform capabilities.
 
-The current release is **0.1.2**.
+The current release is **0.1.3**.
 
 ## Who it is for
 
@@ -75,7 +75,7 @@ For each execution, the library provides a consistent control surface:
 ## Architecture
 
 ```text
-agent runtime → authorized ExecutionRequest → agent-supervisor → child process
+agent runtime → authorized ExecutionRequest → agent-supervisor → native child or opt-in WASM module
 ```
 
 The runtime owns:
@@ -90,7 +90,7 @@ The runtime owns:
 The sandbox owns:
 
 - execution-request validation;
-- native process creation and containment;
+- native process creation and containment, or explicitly selected one-shot WASM execution;
 - environment and filesystem policy enforcement;
 - deadlines, output limits, cancellation, and cleanup;
 - process-group ownership, introspection, and identity records; and
@@ -119,6 +119,10 @@ The supervisor supports:
 Inspect `platform_capabilities()` before requiring optional behavior. Select
 `EnforcementRequirement::Required` when degraded enforcement is unacceptable.
 
+The optional `wasm` Cargo feature adds a pure-computation backend for modules
+that use the [documented guest ABI](docs/wasm-backend.md). Native processes
+remain the default; WASM modules receive no host imports.
+
 ## OpenShell developer adapter
 
 The OpenShell adapter is a developer preview under `dev/openshell-adapter/`,
@@ -134,7 +138,7 @@ Add the crate:
 
 ```toml
 [dependencies]
-agent-supervisor = "0.1.2"
+agent-supervisor = "0.1.3"
 ```
 
 
@@ -237,9 +241,10 @@ behavior, and release notes:
 
 ## Release
 
-See the [0.1.2 release notes](docs/releases/0.1.2.md) for Python bindings and
-the earlier [0.1.1 notes](docs/releases/0.1.1.md) for the separate OpenShell
-developer adapter and its behavior limits.
+See the [0.1.3 release notes](docs/releases/0.1.3.md) for the optional WASM
+runner, the [0.1.2 notes](docs/releases/0.1.2.md) for Python bindings, and the
+[0.1.1 notes](docs/releases/0.1.1.md) for the separate OpenShell developer
+adapter and its behavior limits.
 
 ## License
 

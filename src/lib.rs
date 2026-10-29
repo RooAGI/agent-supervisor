@@ -17,6 +17,8 @@ mod process_control;
 mod pty;
 mod runner;
 mod supervisor;
+#[cfg(feature = "wasm")]
+mod wasm;
 #[cfg(windows)]
 mod windows_filesystem;
 
@@ -40,3 +42,5 @@ pub use supervisor::{
     execute, execute_with_cancellation, spawn, spawn_with_supervisor, wait_all, wait_any,
     ExecutionOutput, SupervisedChild, Supervisor,
 };
+#[cfg(feature = "wasm")]
+pub use wasm::{WasmRunner, WasmRunnerConfig};

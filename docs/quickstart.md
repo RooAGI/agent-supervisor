@@ -4,7 +4,7 @@
 
 ```toml
 [dependencies]
-agent-supervisor = "0.1.2"
+agent-supervisor = "0.1.3"
 ```
 
 ## Build an execution request

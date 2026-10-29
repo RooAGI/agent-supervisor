@@ -50,6 +50,7 @@ nav:
       - Supervisor lifecycle: supervisor-lifecycle.md
       - Process groups and resources: process-groups.md
   - Releases:
+      - 0.1.3: releases/0.1.3.md
       - 0.1.2: releases/0.1.2.md
       - 0.1.1: releases/0.1.1.md
       - 0.1.0: releases/0.1.0.md
