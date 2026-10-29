@@ -26,8 +26,8 @@ impl ProcessRunner for NativeRunner {
 }
 
 /// Execute through an injected runner. Production callers normally pass
-/// [`NativeRunner`]; tests and embedders can provide a deterministic runner
-/// without creating a child process.
+/// [`NativeRunner`], or an opt-in backend such as `WasmRunner` when its
+/// execution contract matches the workload.
 pub async fn execute_with_runner(
     runner: &dyn ProcessRunner,
     request: &ExecutionRequest,
