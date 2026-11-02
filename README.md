@@ -1,6 +1,6 @@
 # RooAGI Agent Supervisor
 
-CONTROL EVERY TOOL PROCESS YOUR APPLICATION STARTS
+SUPERVISE AND CONTAIN AGENT TOOL EXECUTION
 
 RooAGI Agent Supervisor gives your application control over every tool process
 it starts: bound its output, cancel it, clean up its children, and record how
@@ -58,6 +58,43 @@ For each execution, the library provides a consistent control surface:
 - expose liveness, identity, lifecycle, and resource information; and
 - finish with a structured termination result, including after cancellation
   or failure.
+
+## A sandbox layer for agent tools
+
+Agent Supervisor gives agent runtimes a boundary for tools, MCP servers, and
+other code they start. Choose native process execution for programs that need
+the operating system, or opt into the WebAssembly backend for self-contained
+computations. The library applies the policies you request and reports the
+capabilities the selected platform can enforce.
+
+### Run self-contained code with WebAssembly
+
+The optional `wasm` feature runs one-shot WebAssembly modules through Wasmi.
+Modules receive no host imports, and the runner applies configured memory and
+fuel limits. This suits generated or third-party code that can work through the
+documented input/output ABI without filesystem, network, or other host access.
+Native process execution remains the default for ordinary commands and tools.
+
+### Set boundaries for native tools
+
+Native tools can use explicit environment, filesystem, network, and resource
+policies, along with output limits, deadlines, cancellation, and process-tree
+cleanup. Enforcement varies by operating system and policy. Inspect reported
+platform capabilities and use required enforcement when a request must fail
+if a control is unavailable.
+
+### Where it fits
+
+- Run short-lived tools and agent-generated WebAssembly computations.
+- Keep long-running MCP servers and their child processes under supervision.
+- Integrate execution controls into a Rust agent runtime without moving
+  identity, credentials, authorization, or orchestration into the sandbox.
+
+Agent Supervisor is an embeddable Rust library, not a hosted agent platform.
+Native networking uses host access in compatibility mode; select
+`NetworkMode::Disabled` when the platform must deny IP networking. WebAssembly
+modules have no host imports. See the [security model](docs/security-model.md)
+and [API boundaries](docs/api-boundaries.md) for the exact guarantees.
 
 ## Process control in one library
 
