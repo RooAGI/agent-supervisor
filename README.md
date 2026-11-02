@@ -95,6 +95,7 @@ Native networking uses host access in compatibility mode; select
 `NetworkMode::Disabled` when the platform must deny IP networking. WebAssembly
 modules have no host imports. See the [security model](docs/security-model.md)
 and [API boundaries](docs/api-boundaries.md) for the exact guarantees.
+
 ## Process control in one library
 
 - Run tools and MCP servers with bounded input, output, deadlines, and
