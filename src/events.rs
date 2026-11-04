@@ -1,6 +1,7 @@
 use crate::{SandboxError, SupervisedChild};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use tokio::io::AsyncWriteExt;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -28,14 +29,17 @@ pub struct ProcessEventStream {
     child: Option<SupervisedChild>,
     messages: mpsc::Receiver<EventMessage>,
     exit: Option<crate::ProcessReceipt>,
+    completed: Option<crate::ProcessReceipt>,
     process_id: Option<u32>,
     executable: crate::ExecutableIdentity,
     started: bool,
     readers_finished: usize,
+    stdin: Option<Box<dyn tokio::io::AsyncWrite + Unpin + Send>>,
 }
 
 impl ProcessEventStream {
     pub(crate) fn new(mut child: SupervisedChild) -> Result<Self, SandboxError> {
+        let stdin = child.take_stdin();
         let stdout = child
             .take_stdout()
             .ok_or_else(|| SandboxError::execution(std::io::Error::other("stdout unavailable")))?;
@@ -52,11 +56,31 @@ impl ProcessEventStream {
             child: Some(child),
             messages,
             exit: None,
+            completed: None,
             process_id,
             executable,
             started: false,
             readers_finished: 0,
+            stdin,
         })
+    }
+
+    /// Write bytes to the running process stdin.
+    pub async fn write(&mut self, bytes: &[u8]) -> Result<(), SandboxError> {
+        let stdin = self.stdin.as_mut().ok_or_else(|| {
+            SandboxError::execution(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "stdin is closed",
+            ))
+        })?;
+        stdin.write_all(bytes).await.map_err(SandboxError::stdin)
+    }
+
+    /// Close stdin and notify the process that no more input will arrive.
+    pub async fn close_stdin(&mut self) -> Result<(), SandboxError> {
+        // Dropping Tokio's child stdin handle closes the pipe and sends EOF.
+        drop(self.stdin.take());
+        Ok(())
     }
 
     pub async fn next(&mut self) -> Result<Option<ProcessEvent>, SandboxError> {
@@ -102,8 +126,8 @@ impl ProcessEventStream {
                     self.readers_finished += 1;
                 }
                 Err(mpsc::error::TryRecvError::Disconnected) => {
-                    if self.child.is_none() && self.exit.is_some() {
-                        return Ok(self.exit.take().map(ProcessEvent::Exited));
+                    if self.child.is_none() {
+                        return Ok(self.take_exit_event());
                     }
                     tokio::time::sleep(Duration::from_millis(10)).await;
                     continue;
@@ -113,6 +137,7 @@ impl ProcessEventStream {
 
             if self.child.is_none() && self.readers_finished == 2 {
                 if let Some(exit) = self.exit.take() {
+                    self.completed = Some(exit.clone());
                     return Ok(Some(ProcessEvent::Exited(exit)));
                 }
                 return Ok(None);
@@ -163,27 +188,55 @@ impl ProcessEventStream {
             result = self.next() => result,
             _ = cancellation.cancelled() => {
                 let Some(child) = self.child.take() else {
-                    return Ok(self.exit.take().map(ProcessEvent::Exited));
+                    return Ok(self.take_exit_event());
                 };
                 let receipt = child
                     .wait_with_cancellation(cancellation.clone(), Duration::from_millis(250))
                     .await?;
                 self.exit = Some(receipt.clone());
+                self.completed = Some(receipt.clone());
                 Ok(Some(ProcessEvent::Exited(receipt)))
             }
         }
     }
 
+    /// Wait for process completion, discarding any remaining output events.
+    pub async fn wait(&mut self) -> Result<crate::ProcessReceipt, SandboxError> {
+        if let Some(receipt) = &self.completed {
+            return Ok(receipt.clone());
+        }
+        while let Some(event) = self.next().await? {
+            if let ProcessEvent::Exited(receipt) = event {
+                return Ok(receipt);
+            }
+        }
+        self.completed.clone().ok_or_else(|| {
+            SandboxError::execution(std::io::Error::other("process event stream ended"))
+        })
+    }
+
     pub async fn shutdown(
-        mut self,
+        &mut self,
         grace: Duration,
     ) -> Result<crate::ProcessReceipt, SandboxError> {
-        match self.child.take() {
-            Some(child) => child.shutdown(grace).await,
-            None => self.exit.ok_or_else(|| {
-                SandboxError::execution(std::io::Error::other("session already completed"))
-            }),
-        }
+        let receipt = if let Some(child) = self.child.take() {
+            child.shutdown(grace).await?
+        } else if let Some(receipt) = self.completed.clone().or_else(|| self.exit.take()) {
+            receipt
+        } else {
+            return Err(SandboxError::execution(std::io::Error::other(
+                "session already completed",
+            )));
+        };
+        self.completed = Some(receipt.clone());
+        Ok(receipt)
+    }
+
+    fn take_exit_event(&mut self) -> Option<ProcessEvent> {
+        self.exit.take().map(|receipt| {
+            self.completed = Some(receipt.clone());
+            ProcessEvent::Exited(receipt)
+        })
     }
 }
 
@@ -252,7 +305,16 @@ mod tests {
             working_directory: None,
             policy: crate::SandboxPolicy::default(),
         };
-        let mut stream = spawn(&request).unwrap().into_event_stream().unwrap();
+        let supervisor = crate::Supervisor::new();
+        let command = crate::Command {
+            argv: vec!["/usr/bin/printf".into(), "hello".into()],
+            cwd: None,
+        };
+        let mut stream = supervisor
+            .start(&command, &request.policy)
+            .unwrap()
+            .into_event_stream()
+            .unwrap();
         let mut output = Vec::new();
         while let Some(event) = stream.next().await.unwrap() {
             match event {
@@ -263,6 +325,50 @@ mod tests {
             }
         }
         assert_eq!(output, b"hello");
+    }
+
+    #[tokio::test]
+    async fn writes_stdin_and_closes_it_before_observing_exit() {
+        let request = ExecutionRequest {
+            executable: PathBuf::from("/bin/cat"),
+            args: Vec::new(),
+            working_directory: None,
+            policy: crate::SandboxPolicy::default(),
+        };
+        let mut stream = spawn(&request).unwrap().into_event_stream().unwrap();
+        stream.write(b"input bytes").await.unwrap();
+        stream.close_stdin().await.unwrap();
+
+        let mut output = Vec::new();
+        let mut exited = false;
+        while let Some(event) = stream.next().await.unwrap() {
+            match event {
+                ProcessEvent::Stdout(bytes) => output.extend(bytes),
+                ProcessEvent::Exited(_) => exited = true,
+                ProcessEvent::Started { .. } | ProcessEvent::Stderr(_) => {}
+            }
+        }
+        assert_eq!(output, b"input bytes");
+        assert!(exited);
+    }
+
+    #[tokio::test]
+    async fn run_is_the_one_shot_command_entry_point() {
+        let request = ExecutionRequest {
+            executable: PathBuf::from("/usr/bin/printf"),
+            args: vec!["one shot".into()],
+            working_directory: None,
+            policy: crate::SandboxPolicy::default(),
+        };
+
+        let command = crate::Command {
+            argv: vec!["/usr/bin/printf".into(), "one shot".into()],
+            cwd: None,
+        };
+        let output = crate::run(&command, &request.policy).await.unwrap();
+
+        assert!(output.success);
+        assert_eq!(output.stdout, b"one shot");
     }
 
     #[cfg(unix)]

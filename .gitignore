@@ -22,4 +22,5 @@ target
 
 /target/
 /site/
+.env
 .lint-ai/

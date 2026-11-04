@@ -67,7 +67,7 @@ impl WasmRunner {
         let mut engine_config = Config::default();
         engine_config.consume_fuel(true);
         let engine = Engine::new(&engine_config);
-        let module = Module::new(&engine, &mut &wasm_bytes[..]).map_err(|error| {
+        let module = Module::new(&engine, wasm_bytes).map_err(|error| {
             SandboxError::new(
                 SandboxErrorCode::InvalidExecutable,
                 SandboxPhase::Validate,

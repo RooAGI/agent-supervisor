@@ -6,7 +6,7 @@ use agent_supervisor::{
 };
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream, UdpSocket};
 use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -209,4 +209,78 @@ async fn filesystem_sandbox_preserves_host_network_loopback() {
     );
     assert!(received);
     assert_eq!(output.stdout, b"rooagi");
+}
+
+#[tokio::test]
+async fn disabled_network_blocks_connections_to_host_interface() {
+    let route_probe = UdpSocket::bind(("0.0.0.0", 0)).expect("bind route probe");
+    route_probe
+        .connect(("192.0.2.1", 80))
+        .expect("select outbound interface");
+    let interface_ip = route_probe.local_addr().expect("route address").ip();
+    assert!(interface_ip.is_ipv4() && !interface_ip.is_loopback());
+
+    let host_listener = TcpListener::bind((interface_ip, 0)).expect("bind host baseline");
+    let baseline_addr = host_listener.local_addr().expect("host baseline address");
+    TcpStream::connect_timeout(&baseline_addr, Duration::from_secs(2))
+        .expect("host must be able to reach the interface listener");
+    host_listener
+        .accept()
+        .expect("accept host baseline connection");
+
+    let listener = TcpListener::bind((interface_ip, 0)).expect("bind interface listener");
+    let port = listener.local_addr().expect("listener address").port();
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking listener");
+
+    let directory = tempfile::tempdir().expect("temporary working directory");
+    let windir = std::env::var_os("WINDIR").expect("WINDIR");
+    let curl = PathBuf::from(windir).join("System32").join("curl.exe");
+    let mut request = request_for(
+        curl,
+        vec![
+            "--silent".into(),
+            "--show-error".into(),
+            "--connect-timeout".into(),
+            "2".into(),
+            "--max-time".into(),
+            "3".into(),
+            format!("http://{interface_ip}:{port}"),
+        ],
+        FilesystemPolicy::new(vec![FilesystemGrant {
+            root: directory.path().to_path_buf(),
+            access: vec![FilesystemAccess::Read],
+        }]),
+        Some(directory.path().to_path_buf()),
+    );
+    request.policy.network = agent_supervisor::NetworkMode::Disabled;
+    // AppContainer can leave connect() pending until curl's own deadline on
+    // some hosted Windows runners. Give the child more time than curl so the
+    // test checks network denial rather than the supervisor's default timeout.
+    request.policy.limits.timeout_ms = 10_000;
+
+    let output = execute(&request, b"")
+        .await
+        .expect("execute in network-disabled AppContainer");
+    assert!(
+        !output.success,
+        "network-disabled child connected to the host interface"
+    );
+    assert!(
+        matches!(
+            &output.termination,
+            agent_supervisor::TerminationReason::Exited {
+                code: Some(7 | 28),
+                ..
+            } | agent_supervisor::TerminationReason::TimedOut
+        ),
+        "curl must fail to connect, got {:?}; stderr: {}",
+        output.termination,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+        "network-disabled child reached the host-interface listener"
+    );
 }
