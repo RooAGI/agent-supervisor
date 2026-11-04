@@ -20,7 +20,7 @@ application remains responsible for identity, authentication, authorization,
 and orchestration. Enforcement depends on the operating system and selected
 policy; inspect the execution result and platform capabilities.
 
-The current release is **0.1.3**.
+The current version in this checkout is **0.2.0**.
 
 ## Who it is for
 
@@ -94,7 +94,8 @@ Agent Supervisor is an embeddable Rust library, not a hosted agent platform.
 Native networking uses host access in compatibility mode; select
 `NetworkMode::Disabled` when the platform must deny IP networking. WebAssembly
 modules have no host imports. See the [security model](docs/security-model.md)
-and [API boundaries](docs/api-boundaries.md) for the exact guarantees.
+for platform guarantees and [using agent SDKs](docs/api-boundaries.md) for an
+integration example.
 
 ## Process control in one library
 
@@ -107,6 +108,8 @@ and [API boundaries](docs/api-boundaries.md) for the exact guarantees.
   events.
 - Connect pipelines and report failures with stage-level context.
 - Start PTY sessions with the same supervisor-owned lifecycle.
+- Wrap an existing local stdio `rmcp` server with
+  [`run_stdio_server`](docs/mcp.md#adopt-with-the-official-mcp-sdk).
 - Use one provider-neutral Rust API from any agent runtime.
 
 ## Architecture
@@ -175,7 +178,7 @@ Add the crate:
 
 ```toml
 [dependencies]
-agent-supervisor = "0.1.3"
+agent-supervisor = "0.2.0"
 ```
 
 
@@ -210,19 +213,20 @@ For default-deny filesystem access, set `filesystem` to
 `FilesystemGrant` entries.
 
 See the [quickstart](docs/quickstart.md), [security model](docs/security-model.md),
-and [API boundaries](docs/api-boundaries.md) for the integration contract.
+and [using agent SDKs](docs/api-boundaries.md) for the integration example.
 
 ## Python bindings
 
-Version 0.1.2 adds an async Python binding for bounded one-shot execution and
-output streaming. The source package is in `python/`; it has not been published
-to PyPI yet. Build it from this checkout with maturin:
+The Python package is published on PyPI as `agent-supervisor` 0.1.2. Prebuilt
+wheels are available for Apple Silicon macOS, x86-64 Windows, and x86-64 Linux
+with glibc 2.39 or newer:
 
 ```bash
-python -m pip install maturin
-cd python
-python -m maturin develop
+python -m pip install agent-supervisor==0.1.2
 ```
+
+The current repository source is 0.2.0 and can be built with maturin; it has
+not yet been published to PyPI.
 
 See the [Python API guide](docs/python-api.md) for capture, streaming,
 cancellation, and platform behavior.
@@ -278,7 +282,8 @@ behavior, and release notes:
 
 ## Release
 
-See the [0.1.3 release notes](docs/releases/0.1.3.md) for the optional WASM
+See the [0.2.0 release notes](docs/releases/0.2.0.md) for agent-run scopes and
+MCP integrations, the [0.1.3 notes](docs/releases/0.1.3.md) for the optional WASM
 runner, the [0.1.2 notes](docs/releases/0.1.2.md) for Python bindings, and the
 [0.1.1 notes](docs/releases/0.1.1.md) for the separate OpenShell developer
 adapter and its behavior limits.

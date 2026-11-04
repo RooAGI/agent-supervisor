@@ -1,8 +1,10 @@
+mod mcp_stdio;
+
 use agent_supervisor::{
-    execute_with_cancellation, spawn, Enforcement, EnforcementRequirement, EnvironmentPolicy,
-    ExecutionRequest, FilesystemAccess, FilesystemGrant, FilesystemPolicy, NetworkMode,
-    PlatformCapabilities, ProcessEvent, ProcessEventStream, ProcessReceipt, ResourceLimits,
-    SandboxError, SandboxPolicy, TerminationReason,
+    execute_with_cancellation, spawn, spawn_with_supervisor, Enforcement, EnforcementRequirement,
+    EnvironmentPolicy, ExecutionRequest, FilesystemAccess, FilesystemGrant, FilesystemPolicy,
+    NetworkMode, PlatformCapabilities, ProcessEvent, ProcessEventStream, ProcessReceipt,
+    ResourceLimits, SandboxError, SandboxPolicy, Supervisor as RustSupervisor, TerminationReason,
 };
 use pyo3::create_exception;
 use pyo3::exceptions::{PyException, PyRuntimeError, PyStopAsyncIteration, PyValueError};
@@ -291,6 +293,323 @@ struct OutputStream {
     completed: Arc<Mutex<Option<RunResult>>>,
 }
 
+#[pyclass(module = "agent_supervisor._native")]
+struct Process {
+    events: Arc<Mutex<ProcessEventStream>>,
+    completed: Arc<Mutex<Option<RunResult>>>,
+    output: Arc<Mutex<(Vec<u8>, Vec<u8>)>>,
+    _supervisor: Arc<RustSupervisor>,
+}
+
+#[pymethods]
+impl Process {
+    fn __aiter__(slf: Py<Self>) -> Py<Self> {
+        slf
+    }
+
+    fn events(slf: Py<Self>) -> Py<Self> {
+        slf
+    }
+
+    fn __anext__<'py>(slf: Py<Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let events = slf.borrow(py).events.clone();
+        let completed = slf.borrow(py).completed.clone();
+        let output = slf.borrow(py).output.clone();
+        future_into_py(py, async move {
+            let event = events.lock().await.next().await.map_err(to_py_error)?;
+            let Some(event) = event else {
+                return Err(PyStopAsyncIteration::new_err(()));
+            };
+            let (kind, data, result) = match event {
+                ProcessEvent::Started { .. } => ("started", Vec::new(), None),
+                ProcessEvent::Stdout(data) => {
+                    output.lock().await.0.extend_from_slice(&data);
+                    ("stdout", data, None)
+                }
+                ProcessEvent::Stderr(data) => {
+                    output.lock().await.1.extend_from_slice(&data);
+                    ("stderr", data, None)
+                }
+                ProcessEvent::Exited(receipt) => {
+                    let (stdout, stderr) = {
+                        let output = output.lock().await;
+                        (output.0.clone(), output.1.clone())
+                    };
+                    let result = RunResult::from_receipt(receipt, stdout, stderr);
+                    *completed.lock().await = Some(result.clone());
+                    ("exited", Vec::new(), Some(result))
+                }
+            };
+            Python::attach(|py| {
+                Py::new(
+                    py,
+                    OutputEvent {
+                        kind: kind.into(),
+                        data,
+                        result: result.map(|r| Py::new(py, r)).transpose()?,
+                    },
+                )
+            })
+        })
+    }
+
+    fn write<'py>(
+        &self,
+        py: Python<'py>,
+        data: &Bound<'py, PyBytes>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let events = self.events.clone();
+        let bytes = data.as_bytes().to_vec();
+        future_into_py(py, async move {
+            events.lock().await.write(&bytes).await.map_err(to_py_error)
+        })
+    }
+
+    fn close_stdin<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let events = self.events.clone();
+        future_into_py(py, async move {
+            events.lock().await.close_stdin().await.map_err(to_py_error)
+        })
+    }
+
+    fn wait<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let events = self.events.clone();
+        let completed = self.completed.clone();
+        let output = self.output.clone();
+        future_into_py(py, async move {
+            if let Some(result) = completed.lock().await.clone() {
+                return Python::attach(|py| Py::new(py, result));
+            }
+            loop {
+                match events.lock().await.next().await.map_err(to_py_error)? {
+                    Some(ProcessEvent::Stdout(bytes)) => {
+                        output.lock().await.0.extend_from_slice(&bytes);
+                    }
+                    Some(ProcessEvent::Stderr(bytes)) => {
+                        output.lock().await.1.extend_from_slice(&bytes);
+                    }
+                    Some(ProcessEvent::Exited(receipt)) => {
+                        let (stdout, stderr) = {
+                            let output = output.lock().await;
+                            (output.0.clone(), output.1.clone())
+                        };
+                        let result = RunResult::from_receipt(receipt, stdout, stderr);
+                        *completed.lock().await = Some(result.clone());
+                        return Python::attach(|py| Py::new(py, result));
+                    }
+                    Some(_) => continue,
+                    None => return Err(PyRuntimeError::new_err("process event stream ended")),
+                }
+            }
+        })
+    }
+
+    fn shutdown<'py>(&self, py: Python<'py>, grace: f64) -> PyResult<Bound<'py, PyAny>> {
+        if !grace.is_finite() || grace < 0.0 || grace > 60.0 {
+            return Err(PyValueError::new_err(
+                "grace must be between 0 and 60 seconds",
+            ));
+        }
+        let events = self.events.clone();
+        let completed = self.completed.clone();
+        let output = self.output.clone();
+        future_into_py(py, async move {
+            let receipt = events
+                .lock()
+                .await
+                .shutdown(std::time::Duration::from_secs_f64(grace))
+                .await
+                .map_err(to_py_error)?;
+            let (stdout, stderr) = {
+                let output = output.lock().await;
+                (output.0.clone(), output.1.clone())
+            };
+            let result = RunResult::from_receipt(receipt, stdout, stderr);
+            *completed.lock().await = Some(result.clone());
+            Python::attach(|py| Py::new(py, result))
+        })
+    }
+}
+
+#[pyclass(module = "agent_supervisor._native")]
+struct SupervisorHandle {
+    inner: Arc<RustSupervisor>,
+}
+
+#[pyclass(module = "agent_supervisor._native")]
+struct AgentRunHandle {
+    inner: agent_supervisor::AgentRunScope,
+    supervisor: Arc<RustSupervisor>,
+}
+
+#[pymethods]
+impl AgentRunHandle {
+    #[new]
+    #[pyo3(signature = (timeout=300.0, shutdown_grace=5.0))]
+    fn new(timeout: f64, shutdown_grace: f64) -> PyResult<Self> {
+        if !timeout.is_finite()
+            || timeout <= 0.0
+            || !shutdown_grace.is_finite()
+            || !(0.0..=60.0).contains(&shutdown_grace)
+        {
+            return Err(PyValueError::new_err(
+                "invalid run timeout or shutdown grace",
+            ));
+        }
+        let inner = agent_supervisor::AgentRunScope::new(agent_supervisor::AgentRunPolicy {
+            timeout: std::time::Duration::from_secs_f64(timeout),
+            shutdown_grace: std::time::Duration::from_secs_f64(shutdown_grace),
+        });
+        Ok(Self {
+            supervisor: inner.supervisor(),
+            inner,
+        })
+    }
+
+    fn active_processes(&self) -> usize {
+        self.inner.active_processes()
+    }
+
+    fn cancellation_token(&self, py: Python<'_>) -> PyResult<Py<CancellationToken>> {
+        Py::new(
+            py,
+            CancellationToken {
+                token: self.inner.cancellation_token(),
+            },
+        )
+    }
+
+    fn wait_cancelled<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let token = self.inner.cancellation_token();
+        future_into_py(py, async move {
+            token.cancelled().await;
+            Ok(())
+        })
+    }
+
+    fn cancel(&self) {
+        self.inner.request_cancel();
+    }
+
+    fn cancel_now(&self) {
+        self.inner.cancel_now();
+    }
+
+    fn wait_cleanup<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            inner.cancel().await;
+            Ok(())
+        })
+    }
+
+    #[pyo3(signature = (command, *, policy=None, input=None))]
+    fn run<'py>(
+        &self,
+        py: Python<'py>,
+        command: PyRef<'py, Command>,
+        policy: Option<PyRef<'py, Policy>>,
+        input: Option<&Bound<'py, PyBytes>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let request = request_from(&command.clone(), policy.as_deref());
+        let command = agent_supervisor::Command {
+            argv: std::iter::once(request.executable.display().to_string())
+                .chain(request.args.clone())
+                .collect(),
+            cwd: request.working_directory.clone(),
+        };
+        let policy = request.policy.clone();
+        let input = input.map(|v| v.as_bytes().to_vec()).unwrap_or_default();
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            let output = inner
+                .run_command(&command, &policy, &input)
+                .await
+                .map_err(to_py_error)?;
+            Python::attach(|py| Py::new(py, RunResult::from_output(output)))
+        })
+    }
+
+    #[pyo3(signature = (command, *, policy=None))]
+    fn start<'py>(
+        &self,
+        py: Python<'py>,
+        command: PyRef<'py, Command>,
+        policy: Option<PyRef<'py, Policy>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let request = request_from(&command.clone(), policy.as_deref());
+        let supervisor = self.supervisor.clone();
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            let command = agent_supervisor::Command {
+                argv: std::iter::once(request.executable.display().to_string())
+                    .chain(request.args.clone())
+                    .collect(),
+                cwd: request.working_directory.clone(),
+            };
+            let child = inner
+                .start(&command, &request.policy)
+                .map_err(to_py_error)?;
+            let events = child.into_event_stream().map_err(to_py_error)?;
+            Python::attach(|py| {
+                Py::new(
+                    py,
+                    Process {
+                        events: Arc::new(Mutex::new(events)),
+                        completed: Arc::new(Mutex::new(None)),
+                        output: Arc::new(Mutex::new((Vec::new(), Vec::new()))),
+                        _supervisor: supervisor,
+                    },
+                )
+            })
+        })
+    }
+}
+
+#[pymethods]
+impl SupervisorHandle {
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(RustSupervisor::new()),
+        }
+    }
+
+    fn terminate_all(&self) {
+        self.inner.terminate_all();
+    }
+
+    fn active_processes(&self) -> usize {
+        self.inner.active_processes()
+    }
+
+    #[pyo3(signature = (command, *, policy=None))]
+    fn start<'py>(
+        &self,
+        py: Python<'py>,
+        command: PyRef<'py, Command>,
+        policy: Option<PyRef<'py, Policy>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let request = request_from(&command.clone(), policy.as_deref());
+        let supervisor = self.inner.clone();
+        future_into_py(py, async move {
+            let child = spawn_with_supervisor(&request, &supervisor).map_err(to_py_error)?;
+            let events = child.into_event_stream().map_err(to_py_error)?;
+            Python::attach(|py| {
+                Py::new(
+                    py,
+                    Process {
+                        events: Arc::new(Mutex::new(events)),
+                        completed: Arc::new(Mutex::new(None)),
+                        output: Arc::new(Mutex::new((Vec::new(), Vec::new()))),
+                        _supervisor: supervisor,
+                    },
+                )
+            })
+        })
+    }
+}
+
 #[pymethods]
 impl OutputStream {
     fn __aiter__(slf: Py<Self>) -> Py<Self> {
@@ -400,7 +719,7 @@ async fn drive_stream(
                     &mut stderr,
                 )
                 .await;
-            } else if let Some(stream) = stream.take() {
+            } else if let Some(mut stream) = stream.take() {
                 let _ = stream.shutdown(grace).await;
             }
             break;
@@ -460,7 +779,7 @@ async fn drive_stream(
                 break;
             }
             SendState::Closed => {
-                if let Some(stream) = stream.take() {
+                if let Some(mut stream) = stream.take() {
                     let _ = stream.shutdown(grace).await;
                 }
                 break;
@@ -478,7 +797,7 @@ enum SendState {
 }
 
 async fn finish_stream(
-    stream: ProcessEventStream,
+    mut stream: ProcessEventStream,
     sender: &tokio::sync::mpsc::Sender<StreamItem>,
     termination: TerminationReason,
     grace: std::time::Duration,
@@ -690,12 +1009,13 @@ fn stream<'py>(
         .map(|value| value.token.clone())
         .unwrap_or_default();
     future_into_py(py, async move {
-        let mut child = spawn(&request).map_err(to_py_error)?;
+        let child = spawn(&request).map_err(to_py_error)?;
         // This output-streaming helper is for commands that do not need stdin.
         // Dropping the writer sends EOF so commands waiting for input cannot
         // hang indefinitely.
-        drop(child.take_stdin());
         let event_stream = child.into_event_stream().map_err(to_py_error)?;
+        let mut event_stream = event_stream;
+        event_stream.close_stdin().await.map_err(to_py_error)?;
         let token = RustCancellationToken::new();
         let done = RustCancellationToken::new();
         let (sender, receiver) = tokio::sync::mpsc::channel(16);
@@ -763,7 +1083,12 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<RunResult>()?;
     module.add_class::<OutputEvent>()?;
     module.add_class::<OutputStream>()?;
+    module.add_class::<Process>()?;
+    module.add_class::<SupervisorHandle>()?;
+    module.add_class::<AgentRunHandle>()?;
     module.add_class::<CancellationToken>()?;
+    module.add_function(wrap_pyfunction!(mcp_stdio::relay_stdio, module)?)?;
+    module.add_function(wrap_pyfunction!(mcp_stdio::mcp_defaults, module)?)?;
     module.add_function(wrap_pyfunction!(run, module)?)?;
     module.add_function(wrap_pyfunction!(stream, module)?)?;
     module.add_function(wrap_pyfunction!(platform_capabilities, module)?)?;

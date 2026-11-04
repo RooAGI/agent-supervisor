@@ -124,6 +124,16 @@ impl Supervisor {
         lock_processes(&self.processes).len()
     }
 
+    /// Start a child and register it with this supervisor for shared cleanup.
+    pub fn start(
+        &self,
+        command: &crate::Command,
+        policy: &crate::Policy,
+    ) -> Result<SupervisedChild, SandboxError> {
+        let request = command.request(policy);
+        spawn_with_supervisor(&request, self)
+    }
+
     pub fn processes(&self) -> Vec<ProcessInfo> {
         lock_processes(&self.processes)
             .iter()
@@ -173,6 +183,30 @@ impl Supervisor {
         let _ = self.events.send(crate::LifecycleEvent::ShutdownRequested);
         for container in containers {
             let _ = container.terminate();
+        }
+    }
+
+    /// Ask registered process groups to exit, wait up to `grace`, then kill
+    /// any groups that remain alive.
+    pub async fn terminate_all_with_grace(&self, grace: Duration) {
+        let containers = {
+            let mut set = lock_processes(&self.processes);
+            std::mem::take(&mut *set).into_values().collect::<Vec<_>>()
+        };
+        let _ = self.events.send(crate::LifecycleEvent::ShutdownRequested);
+        for container in &containers {
+            let _ = container.request_graceful_stop();
+        }
+        let deadline = tokio::time::Instant::now() + grace;
+        while tokio::time::Instant::now() < deadline
+            && containers.iter().any(|container| container.is_alive())
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        for container in containers {
+            if container.is_alive() {
+                let _ = container.terminate();
+            }
         }
     }
 
@@ -771,6 +805,14 @@ pub async fn execute(
     input: &[u8],
 ) -> Result<ExecutionOutput, SandboxError> {
     execute_with_cancellation(request, input, CancellationToken::new()).await
+}
+
+/// Run a request with empty stdin and collect bounded output.
+pub async fn run(
+    command: &crate::Command,
+    policy: &crate::Policy,
+) -> Result<ExecutionOutput, SandboxError> {
+    execute(&command.request(policy), &[]).await
 }
 
 pub async fn execute_with_cancellation(

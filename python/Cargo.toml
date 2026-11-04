@@ -1,6 +1,6 @@
 [package]
 name = "agent-supervisor-python"
-version = "0.1.3"
+version = "0.2.0"
 edition = "2021"
 publish = false
 
@@ -12,5 +12,5 @@ crate-type = ["cdylib"]
 agent-supervisor = { path = ".." }
 pyo3 = { version = "0.29", features = ["abi3-py39", "extension-module"] }
 pyo3-async-runtimes = { version = "0.29", features = ["tokio-runtime"] }
-tokio = { version = "1", features = ["io-util", "rt", "sync"] }
+tokio = { version = "1", features = ["io-util", "io-std", "rt", "sync"] }
 tokio-util = "0.7"

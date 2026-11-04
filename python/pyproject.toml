@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "agent-supervisor"
-version = "0.1.3"
+version = "0.2.0"
 description = "Policy-driven process isolation and supervision for agent runtimes"
 requires-python = ">=3.9"
 license = { text = "Apache-2.0" }
@@ -18,6 +18,15 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Rust",
 ]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.22,<3"]
+fastmcp = ["fastmcp>=2,<5"]
+openai = ["openai-agents>=0.0.4"]
+microsoft = ["agent-framework-openai>=1.0,<2"]
+langgraph = ["langgraph>=1.0,<2"]
+pydantic-ai = ["pydantic-ai>=1.0,<3"]
+google-adk = ["google-adk>=1.0,<3"]
 
 [tool.maturin]
 manifest-path = "Cargo.toml"
