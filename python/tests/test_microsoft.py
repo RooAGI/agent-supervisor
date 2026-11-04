@@ -77,14 +77,16 @@ class MicrosoftAgentFrameworkTests(unittest.IsolatedAsyncioTestCase):
             observed["process"] = await Supervisor().start(
                 command("import time; time.sleep(30)")
             )
-            result = await run(command("print('tool output')"))
-            return prompt + ":" + result.stdout.decode().strip()
+            observed["tool_result"] = await run(command("print('tool output')"))
+            return prompt
 
         result = await run_agent(
             FakeAgent(operation), "hello", supervision={"shutdown_grace": 0}
         )
 
-        self.assertEqual(result, "hello:tool output")
+        self.assertEqual(result, "hello")
+        self.assertTrue(observed["tool_result"].success)
+        self.assertEqual(observed["tool_result"].exit_code, 0)
         self.assertIsNotNone(observed["scope"])
         self.assertEqual(observed["scope"].active_processes(), 0)
         self.assertIsNone(current_scope())

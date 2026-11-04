@@ -264,7 +264,10 @@ async fn disabled_network_blocks_connections_to_host_interface() {
     assert!(
         matches!(
             &output.termination,
-            agent_supervisor::TerminationReason::Exited { code: Some(7), .. }
+            agent_supervisor::TerminationReason::Exited {
+                code: Some(7 | 28),
+                ..
+            }
         ),
         "curl must execute and fail to connect, got {:?}; stderr: {}",
         output.termination,

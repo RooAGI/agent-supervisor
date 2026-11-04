@@ -77,8 +77,9 @@ class AgentRunScope:
 
             operation_task.cancel()
             await asyncio.gather(operation_task, return_exceptions=True)
+            deadline_expired = time.monotonic() >= self._deadline
             await self.cancel()
-            if cancellation_task in done:
+            if cancellation_task in done and not deadline_expired:
                 raise asyncio.CancelledError
             raise asyncio.TimeoutError("agent run exceeded its deadline")
         except asyncio.CancelledError:

@@ -212,7 +212,7 @@ mod tests {
         });
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let error = scope.run(async { () }).await.unwrap_err();
+        let error = scope.run(async {}).await.unwrap_err();
         assert_eq!(error.code(), "timed_out");
     }
 

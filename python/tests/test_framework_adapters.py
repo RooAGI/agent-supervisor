@@ -27,11 +27,15 @@ class ScopedContextTests(unittest.IsolatedAsyncioTestCase):
             async def __aexit__(self, exc_type, exc, traceback):
                 observed["exit_type"] = exc_type
 
-        with self.assertRaises(TimeoutError):
+        try:
             async with scoped_context_manager(
                 ContextManager(), {"timeout": 0.05, "shutdown_grace": 0}
             ):
                 await asyncio.sleep(30)
+        except asyncio.TimeoutError:
+            pass
+        else:
+            self.fail("scope deadline should raise asyncio.TimeoutError")
 
         self.assertIs(observed["exit_type"], asyncio.CancelledError)
         self.assertEqual(observed["scope"].active_processes(), 0)
@@ -140,7 +144,11 @@ class PydanticAIAdapterTests(unittest.IsolatedAsyncioTestCase):
 
 
 class GoogleADKAdapterTests(unittest.IsolatedAsyncioTestCase):
-    @unittest.skipUnless(importlib.util.find_spec("google.adk"), "install the google-adk extra")
+    @unittest.skipUnless(
+        importlib.util.find_spec("google")
+        and importlib.util.find_spec("google.adk"),
+        "install the google-adk extra",
+    )
     async def test_runner_events_track_and_clean_tool_processes(self):
         from google.adk.agents import BaseAgent
         from google.adk.events import Event
@@ -184,7 +192,11 @@ class GoogleADKAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(abort_signal.is_set())
         self.assertIsNone(current_scope())
 
-    @unittest.skipUnless(importlib.util.find_spec("google.adk"), "install the google-adk extra")
+    @unittest.skipUnless(
+        importlib.util.find_spec("google")
+        and importlib.util.find_spec("google.adk"),
+        "install the google-adk extra",
+    )
     async def test_early_close_signals_adk_abort(self):
         from google.adk.agents import BaseAgent
         from google.adk.events import Event
