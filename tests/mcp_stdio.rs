@@ -9,21 +9,29 @@ const FIXTURE: &str = env!("CARGO_BIN_EXE_mcp-stdio-fixture");
 
 #[test]
 fn stdio_is_relayed_without_protocol_changes() {
-    let request = b"Content-Length: 19\r\n\r\n{\"jsonrpc\":\"2.0\"}\n";
-    let output = run_fixture(&["--value=forwarded"], Some(request), None);
+    let request = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n";
+    let output = run_fixture(
+        &["--value=forwarded", "--delay-output"],
+        Some(request),
+        None,
+    );
     assert!(
         output.status.success(),
         "fixture failed: {:?}",
         output.stderr
     );
-    assert_eq!(
-        output.stdout,
-        request,
-        "unexpected relayed output; stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let expected = serde_json::from_slice::<serde_json::Value>(request).unwrap();
+    let relayed =
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap_or_else(|error| {
+            panic!(
+                "invalid relayed message: {error}; stderr: {:?}",
+                output.stderr
+            )
+        });
+    assert_eq!(relayed, expected, "unexpected relayed message");
     assert!(String::from_utf8_lossy(&output.stderr).contains("arg=forwarded"));
     assert!(String::from_utf8_lossy(&output.stderr).contains("env=<unset>"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("response-written"));
 }
 
 #[test]
@@ -130,7 +138,15 @@ fn run_fixture(
         stderr
             .read_line(&mut line)
             .expect("read startup diagnostic");
-        ready.extend(line.into_bytes());
+        ready.extend_from_slice(line.as_bytes());
+        if args.contains(&"--delay-output") {
+            line.clear();
+            stderr
+                .read_line(&mut line)
+                .expect("read request-received diagnostic");
+            assert_eq!(line, "request-received\n");
+            ready.extend_from_slice(line.as_bytes());
+        }
         drop(child.stdin.take());
     }
     let mut stdout = Vec::new();
