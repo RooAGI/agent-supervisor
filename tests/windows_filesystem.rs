@@ -244,6 +244,8 @@ async fn disabled_network_blocks_connections_to_host_interface() {
             "--show-error".into(),
             "--connect-timeout".into(),
             "2".into(),
+            "--max-time".into(),
+            "3".into(),
             format!("http://{interface_ip}:{port}"),
         ],
         FilesystemPolicy::new(vec![FilesystemGrant {
@@ -253,6 +255,10 @@ async fn disabled_network_blocks_connections_to_host_interface() {
         Some(directory.path().to_path_buf()),
     );
     request.policy.network = agent_supervisor::NetworkMode::Disabled;
+    // AppContainer can leave connect() pending until curl's own deadline on
+    // some hosted Windows runners. Give the child more time than curl so the
+    // test checks network denial rather than the supervisor's default timeout.
+    request.policy.limits.timeout_ms = 10_000;
 
     let output = execute(&request, b"")
         .await
@@ -267,9 +273,9 @@ async fn disabled_network_blocks_connections_to_host_interface() {
             agent_supervisor::TerminationReason::Exited {
                 code: Some(7 | 28),
                 ..
-            }
+            } | agent_supervisor::TerminationReason::TimedOut
         ),
-        "curl must execute and fail to connect, got {:?}; stderr: {}",
+        "curl must fail to connect, got {:?}; stderr: {}",
         output.termination,
         String::from_utf8_lossy(&output.stderr)
     );

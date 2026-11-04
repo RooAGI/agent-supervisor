@@ -11,7 +11,11 @@ from agent_supervisor.microsoft import run as run_agent
 
 
 def command(code):
-    return Command(argv=[sys.executable, "-c", code], timeout=30)
+    return Command(
+        argv=[sys.executable, "-c", code],
+        inherit_env=["SystemRoot", "WINDIR"],
+        timeout=30,
+    )
 
 
 class FakeAgent:
