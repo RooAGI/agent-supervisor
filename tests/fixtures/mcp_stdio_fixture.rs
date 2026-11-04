@@ -1,6 +1,6 @@
 use agent_supervisor::{mcp::run_stdio_server, SandboxPolicy};
 use std::time::Duration;
-use tokio::io::{self as tokio_io, AsyncWriteExt};
+use tokio::io::{self as tokio_io, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 const TEST_ENV: &str = "AGENT_SUPERVISOR_MCP_TEST_VALUE";
 
@@ -41,7 +41,21 @@ async fn main() {
 
         let mut input = tokio_io::stdin();
         let mut output = tokio_io::stdout();
-        tokio_io::copy(&mut input, &mut output).await?;
+        if args.iter().any(|arg| arg == "--delay-output") {
+            let mut request = Vec::new();
+            let mut input = BufReader::new(input);
+            input.read_until(b'\n', &mut request).await?;
+            let mut stderr = tokio_io::stderr();
+            stderr.write_all(b"request-received\n").await?;
+            stderr.flush().await?;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            output.write_all(&request).await?;
+            output.flush().await?;
+            stderr.write_all(b"response-written\n").await?;
+            stderr.flush().await?;
+        } else {
+            tokio_io::copy(&mut input, &mut output).await?;
+        }
         output.shutdown().await?;
         Ok::<(), std::io::Error>(())
     })

@@ -10,7 +10,7 @@ use std::ffi::OsString;
 use std::future::Future;
 use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{self as tokio_io, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
@@ -184,9 +184,19 @@ async fn proxy_stdio(
     ));
     let cancellation = CancellationToken::new();
     let wait_cancellation = cancellation.clone();
+    let shutdown_client_closed = client_closed.clone();
+    let shutdown_cancellation = cancellation.clone();
+    // Closing client stdin is the graceful signal for an stdio server. Let it
+    // finish any in-flight response before requesting process cancellation.
+    let natural_exit_grace = shutdown_grace;
+    let shutdown = tokio::spawn(async move {
+        shutdown_client_closed.cancelled().await;
+        tokio::time::sleep(natural_exit_grace).await;
+        shutdown_cancellation.cancel();
+    });
     let mut wait = tokio::spawn(async move {
         child
-            .wait_with_cancellation(wait_cancellation, shutdown_grace)
+            .wait_with_cancellation(wait_cancellation, Duration::ZERO)
             .await
     });
     let mut input_closed = false;
@@ -197,7 +207,6 @@ async fn proxy_stdio(
             result = &mut wait => break result??,
             _ = client_closed.cancelled(), if !input_closed => {
                 input_closed = true;
-                cancellation.cancel();
             }
             result = &mut relay, if relay_result.is_none() => {
                 let result = join_copy_result(result);
@@ -211,6 +220,7 @@ async fn proxy_stdio(
             }
         }
     };
+    shutdown.abort();
     if relay_result.is_none() {
         relay_result = Some(
             match tokio::time::timeout(shutdown_grace, &mut relay).await {
