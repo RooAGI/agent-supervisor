@@ -83,7 +83,7 @@ impl WindowsChild {
         network: NetworkMode,
         container: &ProcessContainer,
     ) -> io::Result<Self> {
-        let sandbox = WindowsSandbox::prepare(policy)?;
+        let sandbox = WindowsSandbox::prepare(policy, network)?;
         let (stdin_child, stdin_parent) = pipe()?;
         let (stdout_parent, stdout_child) = pipe()?;
         let (stderr_parent, stderr_child) = pipe()?;
@@ -699,24 +699,28 @@ struct WindowsSandbox {
     sid: PSID,
     profile_name: Vec<u16>,
     grants: Vec<DaclGrant>,
-    _loopback: LoopbackExemption,
+    _loopback: Option<LoopbackExemption>,
 }
 
 impl WindowsSandbox {
-    fn prepare(policy: &FilesystemPolicy) -> io::Result<Self> {
+    fn prepare(policy: &FilesystemPolicy, network: NetworkMode) -> io::Result<Self> {
         let id = NEXT_PROFILE.fetch_add(1, Ordering::Relaxed);
         let name = format!("agent-supervisor-{}-{}", std::process::id(), id);
         let profile_name = wide_string(&name)?;
         let sid = create_profile(&profile_name)?;
-        let loopback = match LoopbackExemption::enable(sid) {
-            Ok(value) => value,
-            Err(error) => {
-                unsafe {
-                    FreeSid(sid);
-                    delete_profile(profile_name.as_ptr());
+        let loopback = if network == NetworkMode::Host {
+            match LoopbackExemption::enable(sid) {
+                Ok(value) => Some(value),
+                Err(error) => {
+                    unsafe {
+                        FreeSid(sid);
+                        delete_profile(profile_name.as_ptr());
+                    }
+                    return Err(error);
                 }
-                return Err(error);
             }
+        } else {
+            None
         };
         let mut grants = Vec::new();
         for grant in &policy.grants {
