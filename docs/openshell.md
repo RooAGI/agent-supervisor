@@ -14,7 +14,7 @@ application's `Cargo.toml`:
 
 ```toml
 [dependencies]
-agent-supervisor = "0.2.0"
+agent-supervisor = "0.3.0"
 agent-supervisor-openshell-dev = { path = "../agent-supervisor/dev/openshell-adapter" }
 openshell-sdk = { git = "https://github.com/NVIDIA/OpenShell.git", tag = "v0.1.2" }
 ```

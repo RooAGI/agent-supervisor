@@ -1,11 +1,11 @@
-"""Run Google ADK Runner invocations within an Agent Supervisor scope."""
+"""Run Google ADK Runner invocations within an Agent Supervisor run."""
 
 import asyncio
 
-from ._lifecycle import scoped_iterator
+from ._lifecycle import run_iterator
 
 
-def run(runner, *args, supervision=None, **kwargs):
+def run(runner, *args, supervision=None, supervisor=None, **kwargs):
     """Return the ADK event stream with run deadline and child cleanup.
 
     Iterate the returned async iterator or use it as an async context manager.
@@ -17,10 +17,11 @@ def run(runner, *args, supervision=None, **kwargs):
         abort_signal = asyncio.Event()
         kwargs["abort_signal"] = abort_signal
 
-    return scoped_iterator(
+    return run_iterator(
         runner.run_async(*args, **kwargs),
         supervision,
         on_close=lambda exc, completed: (
             None if completed and exc is None else abort_signal.set()
         ),
+        supervisor=supervisor,
     )

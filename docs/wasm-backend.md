@@ -5,7 +5,7 @@ for self-contained WebAssembly tools. Native execution remains the default.
 
 ```toml
 [dependencies]
-agent-supervisor = { version = "0.2.0", features = ["wasm"] }
+agent-supervisor = { version = "0.3.0", features = ["wasm"] }
 ```
 
 The runner uses Wasmi and exposes no WASI or other host imports. It accepts

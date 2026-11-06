@@ -6,7 +6,7 @@ import sys
 import unittest
 
 from agent_supervisor import Command, Supervisor, run
-from agent_supervisor._run_scope import current_scope
+from agent_supervisor._run_context import current_run
 from agent_supervisor.microsoft import run as run_agent
 
 
@@ -29,7 +29,7 @@ class FakeAgent:
 class FakeResponseStream:
     def __init__(self):
         self.closed = False
-        self.seen_scope = False
+        self.seen_run = False
 
     def __aiter__(self):
         return self
@@ -37,7 +37,7 @@ class FakeResponseStream:
     async def __anext__(self):
         if self.closed:
             raise StopAsyncIteration
-        self.seen_scope = current_scope() is not None
+        self.seen_run = current_run() is not None
         self.closed = True
         return "update"
 
@@ -46,11 +46,47 @@ class FakeResponseStream:
 
 
 class MicrosoftAgentFrameworkTests(unittest.IsolatedAsyncioTestCase):
+    async def test_final_response_waits_for_the_background_reader(self):
+        class Stream:
+            def __init__(self):
+                self.remaining = ["a", "b"]
+                self.read = []
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                await asyncio.sleep(0.01)
+                if not self.remaining:
+                    raise StopAsyncIteration
+                self.read.append(self.remaining.pop(0))
+                return self.read[-1]
+
+            async def get_final_response(self):
+                return list(self.read)
+
+        class Agent:
+            def __init__(self):
+                self.stream = Stream()
+
+            def run(self, prompt, *, stream=False):
+                return self.stream
+
+        supervisor = Supervisor()
+        updates = await run_agent(Agent(), "go", stream=True, supervisor=supervisor)
+        self.assertEqual(await updates.get_final_response(), ["a", "b"])
+
+        async def watch():
+            return [e async for e in supervisor.stream(run=updates.agent_run)]
+
+        events = await asyncio.wait_for(watch(), 10)
+        self.assertEqual([e.payload for e in events if e.kind == "agent"], ["a", "b"])
+
     @unittest.skipUnless(
         importlib.util.find_spec("agent_framework"),
         "install agent-supervisor[microsoft] to run the Microsoft SDK integration test",
     )
-    async def test_official_agent_run_uses_the_shared_scope(self):
+    async def test_official_agent_run_uses_the_shared_run(self):
         from agent_framework import Agent, ChatResponse, Message
 
         class StubChatClient:
@@ -71,13 +107,13 @@ class MicrosoftAgentFrameworkTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result.text, "framework response")
-        self.assertIsNone(current_scope())
+        self.assertIsNone(current_run())
 
     async def test_run_tracks_tools_and_cleans_them_on_success(self):
         observed = {}
 
         async def operation(prompt):
-            observed["scope"] = current_scope()
+            observed["run"] = current_run()
             observed["process"] = await Supervisor().start(
                 command("import time; time.sleep(30)")
             )
@@ -91,15 +127,15 @@ class MicrosoftAgentFrameworkTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "hello")
         self.assertTrue(observed["tool_result"].success)
         self.assertEqual(observed["tool_result"].exit_code, 0)
-        self.assertIsNotNone(observed["scope"])
-        self.assertEqual(observed["scope"].active_processes(), 0)
-        self.assertIsNone(current_scope())
+        self.assertIsNotNone(observed["run"])
+        self.assertEqual(observed["run"].active_processes(), 0)
+        self.assertIsNone(current_run())
 
     async def test_timeout_cancels_run_and_stops_started_processes(self):
         observed = {}
 
         async def operation():
-            observed["scope"] = current_scope()
+            observed["run"] = current_run()
             await Supervisor().start(command("import time; time.sleep(30)"))
             await asyncio.sleep(30)
 
@@ -109,10 +145,10 @@ class MicrosoftAgentFrameworkTests(unittest.IsolatedAsyncioTestCase):
                 supervision={"timeout": 0.1, "shutdown_grace": 0},
             )
 
-        self.assertEqual(observed["scope"].active_processes(), 0)
-        self.assertIsNone(current_scope())
+        self.assertEqual(observed["run"].active_processes(), 0)
+        self.assertIsNone(current_run())
 
-    async def test_stream_keeps_scope_until_consumed_and_closes(self):
+    async def test_stream_keeps_run_until_consumed_and_closes(self):
         class Agent:
             def run(self, prompt, *, stream=False):
                 self.prompt = prompt
@@ -126,12 +162,12 @@ class MicrosoftAgentFrameworkTests(unittest.IsolatedAsyncioTestCase):
             stream=True,
             supervision={"shutdown_grace": 0},
         )
-        self.assertIsNone(current_scope())
+        self.assertIsNone(current_run())
         async with managed as updates:
             self.assertEqual([item async for item in updates], ["update"])
-        self.assertTrue(agent.response_stream.seen_scope)
+        self.assertTrue(agent.response_stream.seen_run)
         self.assertTrue(agent.response_stream.closed)
-        self.assertIsNone(current_scope())
+        self.assertIsNone(current_run())
 
 
 if __name__ == "__main__":

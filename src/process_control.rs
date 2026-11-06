@@ -517,6 +517,11 @@ impl ProcessContainer {
         if process_id == 0 {
             return false;
         } else {
+            #[cfg(target_os = "macos")]
+            if let Ok(members) = macos_members(process_id) {
+                return members.iter().any(|member| member.alive);
+            }
+
             #[cfg(target_os = "linux")]
             if let Some(expected) = *self
                 .process_start_time
@@ -698,7 +703,7 @@ fn macos_member(process_id: libc::pid_t) -> Option<ProcessMember> {
         parent_process_id: (info.pbi_ppid > 0).then_some(info.pbi_ppid),
         start_time_ticks,
         executable,
-        alive: info.pbi_status != 0,
+        alive: info.pbi_status != libc::SZOMB,
     })
 }
 

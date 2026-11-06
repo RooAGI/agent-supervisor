@@ -2,7 +2,7 @@ use crate::{SandboxError, SupervisedChild};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -35,6 +35,7 @@ pub struct ProcessEventStream {
     started: bool,
     readers_finished: usize,
     stdin: Option<Box<dyn tokio::io::AsyncWrite + Unpin + Send>>,
+    tap: Option<crate::event_log::ProcessTap>,
 }
 
 impl ProcessEventStream {
@@ -50,8 +51,9 @@ impl ProcessEventStream {
         let executable = child.executable().clone();
         let (sender, messages) = mpsc::channel(32);
         let (output_limit, stderr_limit) = child.output_limits();
-        spawn_reader(stdout, sender.clone(), true, output_limit);
-        spawn_reader(stderr, sender, false, stderr_limit);
+        let tap = child.take_tap();
+        spawn_reader(stdout, sender.clone(), true, output_limit, tap.clone());
+        spawn_reader(stderr, sender, false, stderr_limit, tap.clone());
         Ok(Self {
             child: Some(child),
             messages,
@@ -62,6 +64,7 @@ impl ProcessEventStream {
             started: false,
             readers_finished: 0,
             stdin,
+            tap,
         })
     }
 
@@ -74,6 +77,10 @@ impl ProcessEventStream {
             ))
         })?;
         stdin.write_all(bytes).await.map_err(SandboxError::stdin)
+    }
+
+    pub(crate) fn take_stdin_writer(&mut self) -> Option<Box<dyn AsyncWrite + Unpin + Send>> {
+        self.stdin.take()
     }
 
     /// Close stdin and notify the process that no more input will arrive.
@@ -103,9 +110,12 @@ impl ProcessEventStream {
                 Ok(EventMessage::Stdout(bytes)) => return Ok(Some(ProcessEvent::Stdout(bytes))),
                 Ok(EventMessage::Stderr(bytes)) => return Ok(Some(ProcessEvent::Stderr(bytes))),
                 Ok(EventMessage::Limit(stdout)) => {
-                    if let Some(child) = self.child.take() {
-                        let _ = child.shutdown(Duration::from_millis(100)).await;
-                    }
+                    let termination = if stdout {
+                        crate::TerminationReason::StdoutLimitExceeded
+                    } else {
+                        crate::TerminationReason::StderrLimitExceeded
+                    };
+                    self.stop_after_reader_error(Some(termination)).await?;
                     return Err(if stdout {
                         SandboxError::output_too_large()
                     } else {
@@ -113,9 +123,7 @@ impl ProcessEventStream {
                     });
                 }
                 Ok(EventMessage::ReadFailed(stdout, error)) => {
-                    if let Some(child) = self.child.take() {
-                        let _ = child.shutdown(Duration::from_millis(100)).await;
-                    }
+                    self.stop_after_reader_error(None).await?;
                     return Err(if stdout {
                         SandboxError::stdout_read(error)
                     } else {
@@ -136,20 +144,19 @@ impl ProcessEventStream {
             }
 
             if self.child.is_none() && self.readers_finished == 2 {
-                if let Some(exit) = self.exit.take() {
-                    self.completed = Some(exit.clone());
-                    return Ok(Some(ProcessEvent::Exited(exit)));
-                }
-                return Ok(None);
+                return Ok(self.take_exit_event());
             }
 
             match self.messages.recv().await {
                 Some(EventMessage::Stdout(bytes)) => return Ok(Some(ProcessEvent::Stdout(bytes))),
                 Some(EventMessage::Stderr(bytes)) => return Ok(Some(ProcessEvent::Stderr(bytes))),
                 Some(EventMessage::Limit(stdout)) => {
-                    if let Some(child) = self.child.take() {
-                        let _ = child.shutdown(Duration::from_millis(100)).await;
-                    }
+                    let termination = if stdout {
+                        crate::TerminationReason::StdoutLimitExceeded
+                    } else {
+                        crate::TerminationReason::StderrLimitExceeded
+                    };
+                    self.stop_after_reader_error(Some(termination)).await?;
                     return Err(if stdout {
                         SandboxError::output_too_large()
                     } else {
@@ -157,9 +164,7 @@ impl ProcessEventStream {
                     });
                 }
                 Some(EventMessage::ReadFailed(stdout, error)) => {
-                    if let Some(child) = self.child.take() {
-                        let _ = child.shutdown(Duration::from_millis(100)).await;
-                    }
+                    self.stop_after_reader_error(None).await?;
                     return Err(if stdout {
                         SandboxError::stdout_read(error)
                     } else {
@@ -195,6 +200,7 @@ impl ProcessEventStream {
                     .await?;
                 self.exit = Some(receipt.clone());
                 self.completed = Some(receipt.clone());
+                self.publish_exit(&receipt);
                 Ok(Some(ProcessEvent::Exited(receipt)))
             }
         }
@@ -229,14 +235,37 @@ impl ProcessEventStream {
             )));
         };
         self.completed = Some(receipt.clone());
+        self.publish_exit(&receipt);
         Ok(receipt)
     }
 
-    fn take_exit_event(&mut self) -> Option<ProcessEvent> {
-        self.exit.take().map(|receipt| {
+    fn publish_exit(&mut self, receipt: &crate::ProcessReceipt) {
+        if let Some(tap) = self.tap.take() {
+            tap.finish(Some(receipt.clone()));
+        }
+    }
+
+    async fn stop_after_reader_error(
+        &mut self,
+        termination: Option<crate::TerminationReason>,
+    ) -> Result<(), SandboxError> {
+        if let Some(child) = self.child.take() {
+            let mut receipt = child.shutdown(Duration::from_millis(100)).await?;
+            if let Some(termination) = termination {
+                receipt.termination = termination;
+            }
+            self.exit = Some(receipt.clone());
             self.completed = Some(receipt.clone());
-            ProcessEvent::Exited(receipt)
-        })
+            self.publish_exit(&receipt);
+        }
+        Ok(())
+    }
+
+    fn take_exit_event(&mut self) -> Option<ProcessEvent> {
+        let receipt = self.exit.take()?;
+        self.completed = Some(receipt.clone());
+        self.publish_exit(&receipt);
+        Some(ProcessEvent::Exited(receipt))
     }
 }
 
@@ -245,7 +274,13 @@ fn spawn_reader(
     sender: mpsc::Sender<EventMessage>,
     stdout: bool,
     limit: usize,
+    tap: Option<crate::event_log::ProcessTap>,
 ) {
+    let publish = move |bytes: &[u8]| match &tap {
+        Some(tap) if stdout => tap.stdout(bytes),
+        Some(tap) => tap.stderr(bytes),
+        None => {}
+    };
     tokio::spawn(async move {
         let mut buffer = [0_u8; 8 * 1024];
         let mut total = 0usize;
@@ -259,6 +294,7 @@ fn spawn_reader(
                     let remaining = limit.saturating_sub(total);
                     if size > remaining {
                         if remaining > 0 {
+                            publish(&buffer[..remaining]);
                             let bytes = if stdout {
                                 EventMessage::Stdout(buffer[..remaining].to_vec())
                             } else {
@@ -270,7 +306,8 @@ fn spawn_reader(
                         let _ = sender.send(EventMessage::ReaderFinished).await;
                         return;
                     }
-                    total += size;
+                    total = total.saturating_add(size);
+                    publish(&buffer[..size]);
                     let message = if stdout {
                         EventMessage::Stdout(buffer[..size].to_vec())
                     } else {

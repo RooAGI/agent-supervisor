@@ -20,7 +20,7 @@ application remains responsible for identity, authentication, authorization,
 and orchestration. Enforcement depends on the operating system and selected
 policy; inspect the execution result and platform capabilities.
 
-The current version in this checkout is **0.2.0**.
+The current version in this checkout is **0.3.0**.
 
 ## Who it is for
 
@@ -178,7 +178,7 @@ Add the crate:
 
 ```toml
 [dependencies]
-agent-supervisor = "0.2.0"
+agent-supervisor = "0.3.0"
 ```
 
 
@@ -217,16 +217,14 @@ and [using agent SDKs](docs/api-boundaries.md) for the integration example.
 
 ## Python bindings
 
-The Python package is published on PyPI as `agent-supervisor` 0.1.2. Prebuilt
-wheels are available for Apple Silicon macOS, x86-64 Windows, and x86-64 Linux
-with glibc 2.39 or newer:
+Install the Python package from PyPI:
 
 ```bash
-python -m pip install agent-supervisor==0.1.2
+python -m pip install agent-supervisor
 ```
 
-The current repository source is 0.2.0 and can be built with maturin; it has
-not yet been published to PyPI.
+To use the current 0.3.0 source from this checkout, build it with maturin; the
+build steps are in [`python/README.md`](python/README.md).
 
 See the [Python API guide](docs/python-api.md) for capture, streaming,
 cancellation, and platform behavior.
@@ -282,7 +280,8 @@ behavior, and release notes:
 
 ## Release
 
-See the [0.2.0 release notes](docs/releases/0.2.0.md) for agent-run scopes and
+See the [0.3.0 release notes](docs/releases/0.3.0.md) for manager-owned jobs,
+supervisor-scoped process IDs, and store/resume behavior; the [0.2.0 release notes](docs/releases/0.2.0.md) cover agent-run scopes and
 MCP integrations, the [0.1.3 notes](docs/releases/0.1.3.md) for the optional WASM
 runner, the [0.1.2 notes](docs/releases/0.1.2.md) for Python bindings, and the
 [0.1.1 notes](docs/releases/0.1.1.md) for the separate OpenShell developer

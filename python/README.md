@@ -2,11 +2,11 @@
 
 Python bindings for the `agent-supervisor` native process supervisor.
 
-Version 0.2.0 source provides bounded one-shot execution and output-event
-streaming through the native Linux, macOS, and Windows backends. The latest
-published PyPI version is 0.1.2. Its wheels target Apple Silicon macOS,
-x86-64 Windows, and x86-64 Linux with glibc 2.39 or newer. The Rust crate's
-optional WASM runner is not exposed by the Python binding.
+Version 0.3.0 source provides bounded one-shot execution, output-event
+streaming, manager-owned background jobs, supervisor-scoped process IDs, and
+agent-run lifecycle management through the native Linux, macOS, and Windows
+backends. The Rust crate's optional WASM runner is not exposed by the Python
+binding.
 
 Install the published package with `python -m pip install agent-supervisor`.
 To use the current repository source, build it from this checkout:
@@ -26,9 +26,8 @@ The API and supported platform behavior are documented in
 optional stdio adapters for the official MCP Python SDK and Prefect FastMCP; see
 [`../docs/mcp.md`](../docs/mcp.md) for complete server examples and installation steps.
 
-The 0.2.0 repository source includes optional run adapters for OpenAI Agents
-SDK, Microsoft Agent Framework, LangGraph, PydanticAI, and Google ADK. The
-published PyPI package is 0.1.2 and does not include these adapters yet. From a
+The 0.3.0 source includes optional run adapters for OpenAI Agents SDK,
+Microsoft Agent Framework, LangGraph, PydanticAI, and Google ADK. From a
 checkout, install an adapter with its matching extra, for example:
 
 ```bash
@@ -37,7 +36,7 @@ python -m pip install -e '.[langgraph]'
 ```
 
 Use `openai`, `microsoft`, `pydantic-ai`, or `google-adk` for the other
-adapters. They share the Rust run scope,
+adapters. They share the Rust agent run,
 apply the same default deadline and cleanup behavior, and clean up local tool
 processes started through Agent Supervisor. Agent code remains in your app
 process. See the
