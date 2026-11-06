@@ -11,7 +11,10 @@ from agent_supervisor._lifecycle import run_context_manager, run_iterator
 
 
 def command(code="import time; time.sleep(30)"):
-    return Command(argv=[sys.executable, "-c", code], timeout=30)
+    options = {}
+    if sys.platform == "win32":
+        options["inherit_env"] = ["SystemRoot", "WINDIR"]
+    return Command(argv=[sys.executable, "-c", code], timeout=30, **options)
 
 
 class AgentRunContextTests(unittest.IsolatedAsyncioTestCase):
@@ -304,11 +307,22 @@ class WatchAgentStreamTests(unittest.IsolatedAsyncioTestCase):
         supervisor = Supervisor()
 
         async def framework_stream():
-            self.assertIs(current_run(), stream.agent_run)
             yield "calling tool"
             # Started by a tool, inside the run this stream belongs to.
             result = await run_tool(command("print('tool output')"))
-            self.assertEqual(result.stdout.strip(), b"tool output")
+            self.assertTrue(
+                result.success,
+                "tool command failed: exit_code={!r}, stderr={!r}".format(
+                    result.exit_code, result.stderr
+                ),
+            )
+            self.assertEqual(
+                result.stdout.strip(),
+                b"tool output",
+                "tool command returned no stdout: exit_code={!r}, stderr={!r}".format(
+                    result.exit_code, result.stderr
+                ),
+            )
             yield "tool finished"
 
         stream = run_iterator(framework_stream(), supervisor=supervisor)

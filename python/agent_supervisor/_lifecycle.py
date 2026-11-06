@@ -81,7 +81,7 @@ class AgentEventPump:
                 if remaining <= 0:
                     raise asyncio.TimeoutError("agent run exceeded its deadline")
                 try:
-                    event = await asyncio.wait_for(self._next_event(), remaining)
+                    event = await asyncio.wait_for(self._iterator.__anext__(), remaining)
                 except StopAsyncIteration:
                     completed = True
                     break
@@ -98,16 +98,6 @@ class AgentEventPump:
         except BaseException as exc:
             failure = failure or exc
         self._queue.put_nowait(_Failure(failure) if failure is not None else _DONE)
-
-    async def _next_event(self):
-        # `wait_for` advances the iterator in its own task. Set the run in
-        # that task explicitly so tools called by async generators always
-        # inherit this invocation's process scope.
-        token = active_run.set(self._run)
-        try:
-            return await self._iterator.__anext__()
-        finally:
-            active_run.reset(token)
 
     async def get(self):
         """Return the next event, or raise when the stream has ended."""
