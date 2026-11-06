@@ -311,6 +311,9 @@ class WatchAgentStreamTests(unittest.IsolatedAsyncioTestCase):
 
         stream = run_iterator(framework_stream(), supervisor=supervisor)
         events = await self.watch(supervisor, stream.agent_run)
+        # Drain the adapter's caller-facing stream too, so a tool exception
+        # cannot be hidden by the watcher merely observing run_ended.
+        self.assertEqual([event async for event in stream], ["calling tool", "tool finished"])
         kinds = [event.kind for event in events]
         self.assertLess(kinds.index("agent"), kinds.index("stdout"))
         self.assertEqual(

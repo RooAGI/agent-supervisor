@@ -590,12 +590,12 @@ mod tests {
         // here makes this watcher test depend on OS
         // process signaling (which can return EPERM on macOS CI).
         let unknown_process: SupervisorProcessId =
-            "v1:00000000-0000-0000-0000-000000000001:1"
-                .parse()
-                .unwrap();
-        assert!(collect(&mut supervisor.stream(StreamScope::Process(unknown_process)))
-            .await
-            .is_empty());
+            "v1:00000000-0000-0000-0000-000000000001:1".parse().unwrap();
+        assert!(
+            collect(&mut supervisor.stream(StreamScope::Process(unknown_process)))
+                .await
+                .is_empty()
+        );
     }
 
     #[tokio::test]
