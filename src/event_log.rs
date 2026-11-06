@@ -586,13 +586,16 @@ mod tests {
             .await
             .is_empty());
         own_run.cancel().await;
-        let job = other
-            .start_background(&sh("sleep 5"), &Policy::default())
-            .unwrap();
-        assert!(collect(&mut supervisor.stream(StreamScope::Process(job)))
+        // Use a synthetic unregistered ID. Starting and killing a real child
+        // here makes this watcher test depend on OS
+        // process signaling (which can return EPERM on macOS CI).
+        let unknown_process: SupervisorProcessId =
+            "v1:00000000-0000-0000-0000-000000000001:1"
+                .parse()
+                .unwrap();
+        assert!(collect(&mut supervisor.stream(StreamScope::Process(unknown_process)))
             .await
             .is_empty());
-        other.shutdown_all(Duration::ZERO).await.unwrap();
     }
 
     #[tokio::test]
