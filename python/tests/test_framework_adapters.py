@@ -304,9 +304,11 @@ class WatchAgentStreamTests(unittest.IsolatedAsyncioTestCase):
         supervisor = Supervisor()
 
         async def framework_stream():
+            self.assertIs(current_run(), stream.agent_run)
             yield "calling tool"
             # Started by a tool, inside the run this stream belongs to.
-            await run_tool(command("print('tool output')"))
+            result = await run_tool(command("print('tool output')"))
+            self.assertEqual(result.stdout.strip(), b"tool output")
             yield "tool finished"
 
         stream = run_iterator(framework_stream(), supervisor=supervisor)
