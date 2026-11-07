@@ -4,23 +4,23 @@ import asyncio
 import inspect
 from contextvars import Token
 
-from ._lifecycle import new_scope, supervision_settings
-from ._run_scope import active_scope
+from ._lifecycle import AgentEventPump, new_run, supervision_settings
+from ._run_context import active_run
 
 
-async def run(agent, *args, supervision=None, **kwargs):
-    """Run one Microsoft Agent Framework invocation inside a shared scope.
+async def run(agent, *args, supervision=None, supervisor=None, **kwargs):
+    """Run one Microsoft Agent Framework invocation inside a shared run.
 
     Local commands started through :func:`agent_supervisor.run`,
-    :func:`agent_supervisor.stream`, or :class:`agent_supervisor.Supervisor`
+    :meth:`agent_supervisor.Supervisor.stream`, or :class:`agent_supervisor.Supervisor`
     during this invocation are registered with its native process supervisor.
     ``supervision`` accepts ``timeout`` (default 300 seconds) and
     ``shutdown_grace`` (default 5 seconds).
 
-    For ``stream=True``, this returns a scoped async response stream. Consume it
+    For ``stream=True``, this returns a AgentRun-backed async response stream. Consume it
     fully or use it as an async context manager so early exits clean up.
     """
-    scope = new_scope(supervision)
+    run = new_run(supervision, supervisor)
     try:
         method = getattr(agent, "run", None)
         if method is None or not callable(method):
@@ -30,16 +30,16 @@ async def run(agent, *args, supervision=None, **kwargs):
             result = method(*args, **kwargs)
             return await result if inspect.isawaitable(result) else result
 
-        result = await scope.run(invoke())
+        result = await run.run(invoke())
 
         if kwargs.get("stream", False) and hasattr(result, "__aiter__"):
             timeout, _ = _settings(supervision)
-            return _ScopedResponseStream(result, scope, timeout)
+            return _AgentRunResponseStream(result, run, timeout)
 
-        await scope.cancel()
+        await run.cancel()
         return result
     except BaseException:
-        await asyncio.shield(scope.cancel())
+        await asyncio.shield(run.cancel())
         raise
 
 
@@ -47,53 +47,57 @@ def _settings(supervision):
     return supervision_settings(supervision)
 
 
-class _ScopedResponseStream:
-    """Keep a run scope alive while a Microsoft ResponseStream is consumed."""
+class _AgentRunResponseStream:
+    """Keep an agent run alive while a Microsoft ResponseStream is consumed.
 
-    def __init__(self, stream, scope, timeout):
+    ``agent_run`` can be passed to ``Supervisor.stream(run=...)``.
+    """
+
+    def __init__(self, stream, run, timeout):
         self._stream = stream
-        self._iterator = stream.__aiter__()
-        self._scope = scope
-        self._deadline = asyncio.get_running_loop().time() + timeout
+        self._run = run
+        self.agent_run = run
         self._closed = False
+        self._deadline = asyncio.get_running_loop().time() + timeout
+        self._pump = AgentEventPump(
+            stream.__aiter__(), run, self._deadline, self._finish
+        )
 
     def __aiter__(self):
         return self
 
     async def __anext__(self):
-        token = active_scope.set(self._scope)
         try:
-            remaining = self._remaining()
-            return await asyncio.wait_for(self._iterator.__anext__(), remaining)
+            return await self._pump.get()
         except StopAsyncIteration:
-            await self.aclose()
             raise
         except BaseException as exc:
             await self.aclose(exc)
             raise
-        finally:
-            active_scope.reset(token)
 
     async def get_final_response(self):
         method = getattr(self._stream, "get_final_response", None)
         if method is None:
             raise AttributeError("response stream has no get_final_response()")
-        token = active_scope.set(self._scope)
+        # The background reader consumes the stream, so let it finish first.
+        await self._pump.wait()
+        token = active_run.set(self._run)
         try:
-            result = await asyncio.wait_for(method(), self._remaining())
-            await self.aclose()
-            return result
+            return await asyncio.wait_for(method(), self._remaining())
         except BaseException as exc:
             await self.aclose(exc)
             raise
         finally:
-            active_scope.reset(token)
+            active_run.reset(token)
 
     async def aclose(self, exc=None):
+        await self._pump.stop(exc)
+
+    async def _finish(self, exc, completed):
         if self._closed:
             return
         self._closed = True
-        token: Token = active_scope.set(self._scope)
+        token: Token = active_run.set(self._run)
         try:
             close = getattr(self._stream, "close", None)
             if close is not None:
@@ -101,8 +105,8 @@ class _ScopedResponseStream:
                 if inspect.isawaitable(result):
                     await result
         finally:
-            await asyncio.shield(self._scope.cancel())
-            active_scope.reset(token)
+            await asyncio.shield(self._run.cancel())
+            active_run.reset(token)
 
     async def __aenter__(self):
         return self

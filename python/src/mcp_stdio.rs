@@ -15,6 +15,8 @@ pub(super) fn mcp_defaults() -> (f64, usize, usize, usize, f64) {
     )
 }
 
+// Mirrors the keyword-only Python function, so the arguments cannot be grouped.
+#[allow(clippy::too_many_arguments)]
 #[pyfunction]
 #[pyo3(signature = (command, *, policy=None, cancellation=None, shutdown_grace=2.0, call_timeout=30.0, max_concurrent_calls=4, max_result_bytes=1048576, denied_tools=None))]
 pub(super) fn relay_stdio<'py>(

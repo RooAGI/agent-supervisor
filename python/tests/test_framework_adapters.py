@@ -5,22 +5,25 @@ import importlib.util
 import sys
 import unittest
 
-from agent_supervisor import Command, Supervisor
-from agent_supervisor._run_scope import current_scope
-from agent_supervisor._lifecycle import scoped_context_manager
+from agent_supervisor import Command, Supervisor, run as run_tool
+from agent_supervisor._run_context import current_run
+from agent_supervisor._lifecycle import run_context_manager, run_iterator
 
 
 def command(code="import time; time.sleep(30)"):
-    return Command(argv=[sys.executable, "-c", code], timeout=30)
+    options = {}
+    if sys.platform == "win32":
+        options["inherit_env"] = ["SystemRoot", "WINDIR"]
+    return Command(argv=[sys.executable, "-c", code], timeout=30, **options)
 
 
-class ScopedContextTests(unittest.IsolatedAsyncioTestCase):
+class AgentRunContextTests(unittest.IsolatedAsyncioTestCase):
     async def test_deadline_exits_native_stream_context_and_cleans_tools(self):
         observed = {}
 
         class ContextManager:
             async def __aenter__(self):
-                observed["scope"] = current_scope()
+                observed["run"] = current_run()
                 await Supervisor().start(command())
                 return self
 
@@ -28,18 +31,18 @@ class ScopedContextTests(unittest.IsolatedAsyncioTestCase):
                 observed["exit_type"] = exc_type
 
         try:
-            async with scoped_context_manager(
-                ContextManager(), {"timeout": 0.05, "shutdown_grace": 0}
+            async with run_context_manager(
+                lambda _run: ContextManager(), {"timeout": 0.05, "shutdown_grace": 0}
             ):
                 await asyncio.sleep(30)
         except asyncio.TimeoutError:
             pass
         else:
-            self.fail("scope deadline should raise asyncio.TimeoutError")
+            self.fail("run deadline should raise asyncio.TimeoutError")
 
         self.assertIs(observed["exit_type"], asyncio.CancelledError)
-        self.assertEqual(observed["scope"].active_processes(), 0)
-        self.assertIsNone(current_scope())
+        self.assertEqual(observed["run"].active_processes(), 0)
+        self.assertIsNone(current_run())
 
 
 class LangGraphAdapterTests(unittest.IsolatedAsyncioTestCase):
@@ -57,7 +60,7 @@ class LangGraphAdapterTests(unittest.IsolatedAsyncioTestCase):
             value: str
 
         async def node(state):
-            observed["scope"] = current_scope()
+            observed["run"] = current_run()
             await Supervisor().start(command())
             return {"value": state["value"] + " done"}
 
@@ -70,11 +73,11 @@ class LangGraphAdapterTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result["value"], "graph done")
-        self.assertEqual(observed["scope"].active_processes(), 0)
-        self.assertIsNone(current_scope())
+        self.assertEqual(observed["run"].active_processes(), 0)
+        self.assertIsNone(current_run())
 
     @unittest.skipUnless(importlib.util.find_spec("langgraph"), "install the langgraph extra")
-    async def test_stream_keeps_scope_during_node_execution(self):
+    async def test_stream_keeps_run_during_node_execution(self):
         from typing import TypedDict
 
         from langgraph.graph import END, START, StateGraph
@@ -87,7 +90,7 @@ class LangGraphAdapterTests(unittest.IsolatedAsyncioTestCase):
             value: str
 
         async def node(state):
-            observed.append(current_scope() is not None)
+            observed.append(current_run() is not None)
             return {"value": state["value"] + " streamed"}
 
         builder = StateGraph(State)
@@ -101,7 +104,7 @@ class LangGraphAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(observed)
         self.assertTrue(all(observed))
         self.assertTrue(chunks)
-        self.assertIsNone(current_scope())
+        self.assertIsNone(current_run())
 
 
 class PydanticAIAdapterTests(unittest.IsolatedAsyncioTestCase):
@@ -117,16 +120,16 @@ class PydanticAIAdapterTests(unittest.IsolatedAsyncioTestCase):
 
         @agent.tool_plain
         async def run_project_tests() -> str:
-            observed["scope"] = current_scope()
+            observed["run"] = current_run()
             await Supervisor().start(command())
             return "tests completed"
 
         result = await run(agent, "Run tests", supervision={"shutdown_grace": 0})
 
         self.assertIsNotNone(result.output)
-        self.assertIn("scope", observed)
-        self.assertEqual(observed["scope"].active_processes(), 0)
-        self.assertIsNone(current_scope())
+        self.assertIn("run", observed)
+        self.assertEqual(observed["run"].active_processes(), 0)
+        self.assertIsNone(current_run())
 
     @unittest.skipUnless(importlib.util.find_spec("pydantic_ai"), "install the pydantic-ai extra")
     async def test_agent_stream_context_cleans_up(self):
@@ -139,8 +142,8 @@ class PydanticAIAdapterTests(unittest.IsolatedAsyncioTestCase):
         async with run_stream(agent, "Say hello", supervision={"shutdown_grace": 0}) as result:
             self.assertIsNotNone(result)
             async for _text in result.stream_text():
-                self.assertIsNotNone(current_scope())
-        self.assertIsNone(current_scope())
+                self.assertIsNotNone(current_run())
+        self.assertIsNone(current_run())
 
 
 class GoogleADKAdapterTests(unittest.IsolatedAsyncioTestCase):
@@ -162,7 +165,7 @@ class GoogleADKAdapterTests(unittest.IsolatedAsyncioTestCase):
 
         class ProbeAgent(BaseAgent):
             async def _run_async_impl(self, context):
-                observed.append(current_scope())
+                observed.append(current_run())
                 await Supervisor().start(command())
                 yield Event(author=self.name)
 
@@ -190,7 +193,7 @@ class GoogleADKAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(observed[0])
         self.assertEqual(observed[0].active_processes(), 0)
         self.assertFalse(abort_signal.is_set())
-        self.assertIsNone(current_scope())
+        self.assertIsNone(current_run())
 
     @unittest.skipUnless(
         importlib.util.find_spec("google")
@@ -231,4 +234,153 @@ class GoogleADKAdapterTests(unittest.IsolatedAsyncioTestCase):
         await updates.aclose()
 
         self.assertTrue(abort_signal.is_set())
-        self.assertIsNone(current_scope())
+        self.assertIsNone(current_run())
+
+
+class WatchAgentStreamTests(unittest.IsolatedAsyncioTestCase):
+    async def watch(self, supervisor, agent_run):
+        async def read():
+            return [event async for event in supervisor.stream(run=agent_run)]
+
+        return await asyncio.wait_for(read(), 20)
+
+    async def test_watcher_sees_agent_events_when_nobody_reads_the_stream(self):
+        async def framework_stream():
+            for number in range(3):
+                yield number
+
+        supervisor = Supervisor()
+        stream = run_iterator(framework_stream(), supervisor=supervisor)
+
+        events = await self.watch(supervisor, stream.agent_run)
+
+        payloads = [event.payload for event in events if event.kind == "agent"]
+        self.assertEqual(payloads, [0, 1, 2])
+        self.assertEqual(events[-1].kind, "run_ended")
+        self.assertEqual(supervisor.active_agent_runs(), 0)
+
+    async def test_caller_still_receives_every_event_after_the_watcher(self):
+        async def framework_stream():
+            for number in range(3):
+                yield number
+
+        supervisor = Supervisor()
+        stream = run_iterator(framework_stream(), supervisor=supervisor)
+        await self.watch(supervisor, stream.agent_run)
+        self.assertEqual([event async for event in stream], [0, 1, 2])
+
+    async def test_closing_early_stops_the_framework_stream_and_ends_the_run(self):
+        closed = asyncio.Event()
+
+        async def framework_stream():
+            try:
+                yield "first"
+                await asyncio.sleep(30)
+                yield "never"
+            finally:
+                closed.set()
+
+        supervisor = Supervisor()
+        stream = run_iterator(framework_stream(), supervisor=supervisor)
+        self.assertEqual(await stream.__anext__(), "first")
+        await stream.aclose()
+        self.assertTrue(closed.is_set())
+        self.assertEqual(supervisor.active_agent_runs(), 0)
+
+    async def test_run_deadline_reaches_the_caller_and_ends_the_run(self):
+        async def framework_stream():
+            yield "first"
+            await asyncio.sleep(30)
+
+        supervisor = Supervisor()
+        stream = run_iterator(
+            framework_stream(),
+            {"timeout": 0.2, "shutdown_grace": 0},
+            supervisor=supervisor,
+        )
+        self.assertEqual(await stream.__anext__(), "first")
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(stream.__anext__(), 10)
+        self.assertEqual(supervisor.active_agent_runs(), 0)
+
+    async def test_tool_output_and_agent_events_share_one_stream(self):
+        supervisor = Supervisor()
+
+        async def framework_stream():
+            yield "calling tool"
+            # Started by a tool, inside the run this stream belongs to.
+            result = await run_tool(command("print('tool output')"))
+            self.assertTrue(
+                result.success,
+                "tool command failed: exit_code={!r}, stderr={!r}".format(
+                    result.exit_code, result.stderr
+                ),
+            )
+            self.assertEqual(
+                result.stdout.strip(),
+                b"tool output",
+                "tool command returned no stdout: exit_code={!r}, stderr={!r}".format(
+                    result.exit_code, result.stderr
+                ),
+            )
+            yield "tool finished"
+
+        stream = run_iterator(framework_stream(), supervisor=supervisor)
+        events = await self.watch(supervisor, stream.agent_run)
+        # Drain the adapter's caller-facing stream too, so a tool exception
+        # cannot be hidden by the watcher merely observing run_ended.
+        self.assertEqual([event async for event in stream], ["calling tool", "tool finished"])
+        kinds = [event.kind for event in events]
+        self.assertLess(kinds.index("agent"), kinds.index("stdout"))
+        self.assertEqual(
+            b"".join(e.data for e in events if e.kind == "stdout").strip(),
+            b"tool output",
+        )
+        self.assertEqual(
+            [e.payload for e in events if e.kind == "agent"],
+            ["calling tool", "tool finished"],
+        )
+
+    @unittest.skipUnless(importlib.util.find_spec("langgraph"), "install the langgraph extra")
+    async def test_real_langgraph_stream_reaches_the_watcher(self):
+        from typing import TypedDict
+
+        from langgraph.graph import END, START, StateGraph
+
+        from agent_supervisor.langgraph import stream as stream_graph
+
+        class State(TypedDict):
+            value: int
+
+        builder = StateGraph(State)
+        builder.add_node("step", lambda state: {"value": state["value"] + 1})
+        builder.add_edge(START, "step")
+        builder.add_edge("step", END)
+
+        supervisor = Supervisor()
+        stream = stream_graph(builder.compile(), {"value": 1}, supervisor=supervisor)
+        events = await self.watch(supervisor, stream.agent_run)
+        self.assertIn(
+            {"step": {"value": 2}},
+            [event.payload for event in events if event.kind == "agent"],
+        )
+
+    @unittest.skipUnless(importlib.util.find_spec("pydantic_ai"), "install the pydantic-ai extra")
+    async def test_real_pydantic_ai_events_reach_the_watcher(self):
+        from pydantic_ai import Agent
+        from pydantic_ai.models.test import TestModel
+
+        from agent_supervisor.pydantic_ai import run_stream
+
+        def lookup() -> str:
+            """Return a value."""
+            return "value"
+
+        agent = Agent(TestModel(), tools=[lookup])
+        supervisor = Supervisor()
+        context = run_stream(agent, "Say hello", supervisor=supervisor)
+        async with context as result:
+            text = [chunk async for chunk in result.stream_text()]
+        self.assertTrue(text)
+        events = await self.watch(supervisor, context.agent_run)
+        self.assertTrue([event for event in events if event.kind == "agent"])

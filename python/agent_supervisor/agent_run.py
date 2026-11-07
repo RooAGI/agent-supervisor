@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from ._native import AgentRunHandle
-from ._run_scope import active_scope
+from ._run_context import active_run
 
 
 @dataclass(frozen=True)
@@ -31,28 +31,20 @@ class AgentRunPolicy:
         object.__setattr__(self, "shutdown_grace", float(self.shutdown_grace))
 
 
-class AgentRunScope:
-    """Shared deadline and cleanup scope for an async agent run and its tools.
+class AgentRun:
+    """One agent call created and owned by an application ``Supervisor``."""
 
-    Pass this scope to tool callbacks and use :meth:`run` around the framework
-    invocation. Tool commands started by this scope share its cancellation and
-    are cleaned up when :meth:`cancel` is awaited.
-    """
-
-    def __init__(self, policy: Optional[AgentRunPolicy] = None):
-        if policy is None:
-            policy = AgentRunPolicy()
-        if not isinstance(policy, AgentRunPolicy):
-            raise TypeError("policy must be an AgentRunPolicy")
+    def __init__(self, native, supervisor, policy):
         self.policy = policy
-        self._native = AgentRunHandle(policy.timeout, policy.shutdown_grace)
+        self._native = native
+        self._supervisor = supervisor
         self._deadline = time.monotonic() + policy.timeout
 
     async def run(self, operation):
-        """Await a framework operation within this scope's overall deadline.
+        """Await a framework operation within this run's overall deadline.
 
         The operation's result or exception is passed through. Deadline expiry
-        raises ``asyncio.TimeoutError``; scope cancellation raises
+        raises ``asyncio.TimeoutError``; run cancellation raises
         ``asyncio.CancelledError``. Both paths clean up registered tool
         processes before returning.
         """
@@ -63,7 +55,7 @@ class AgentRunScope:
             await self.cancel()
             raise asyncio.TimeoutError("agent run exceeded its deadline")
 
-        scope_token = active_scope.set(self)
+        run_token = active_run.set(self)
         operation_task = asyncio.ensure_future(operation)
         cancellation_task = asyncio.ensure_future(self._native.wait_cancelled())
         try:
@@ -92,15 +84,28 @@ class AgentRunScope:
             if not cancellation_task.done():
                 cancellation_task.cancel()
             await asyncio.gather(cancellation_task, return_exceptions=True)
-            active_scope.reset(scope_token)
+            active_run.reset(run_token)
 
     async def run_command(self, command, *, policy=None, input=None):
         """Run one bounded local command within the remaining run deadline."""
         return await self._native.run(command, policy=policy, input=input)
 
     async def start(self, command, *, policy=None):
-        """Start a persistent local process owned by this run scope."""
+        """Start a persistent local process owned by this agent run."""
         return await self._native.start(command, policy=policy)
+
+    @property
+    def id(self):
+        """This run's ID, as seen in ``SupervisorEvent.run_id``."""
+        return self._native.id
+
+    def publish_agent_event(self, event):
+        """Show a framework event to watchers of this run.
+
+        The object is passed through unchanged and never reaches the model.
+        Framework adapters call this for you.
+        """
+        self._native.publish_agent_event(event)
 
     def cancellation_token(self):
         """Return a cloneable native token for framework cancellation APIs."""

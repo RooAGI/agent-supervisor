@@ -5,14 +5,19 @@ hide:
 
 # Connect Agent Supervisor to an agent SDK
 
-Your agent SDK chooses when to call a tool. The Python function registered as
-that tool is where your application checks authorization and calls
-`agent_supervisor`. The supervisor runs the command and returns its bounded
-output and result to the tool function.
+Your application creates one top-level `Supervisor`. It owns each `AgentRun`
+and the local processes started by that run. The agent framework still runs
+the agent, calls the model, and chooses tools. Your tool functions check
+authorization and start approved local processes through Agent Supervisor.
 
 ```text
-Agent SDK → your authorized tool function → agent_supervisor → command result
+Application → Supervisor → AgentRun → agent framework → tool function → local process
 ```
+
+Pass the same `supervisor=supervisor` argument to framework adapters across
+calls when you want the application manager to own and shut down those runs
+together. Each `AgentRun` still cleans up only the processes started for its
+own invocation.
 
 The examples below each define their own tool function. There is no shared
 tool module: copy the function into the tool adapter for the SDK you use, then
@@ -25,10 +30,10 @@ framework—not the lifetime of an `Agent` object and not a separate agent
 process. The framework continues to run the agent and make model requests.
 Agent Supervisor provides the lifecycle around that invocation:
 
-1. **Start:** open a run scope and start its overall deadline.
+1. **Start:** `Supervisor` creates an `AgentRun` and starts its deadline.
 2. **Run:** let the framework execute its turns, handoffs, and tool calls.
-   Tool functions start local commands through Agent Supervisor, which tracks
-   those processes in the active scope.
+   Tool functions start local commands through the run, and `Supervisor`
+   tracks those processes under that `AgentRun`.
 3. **End:** observe normal completion, an error, caller cancellation, or the
    deadline.
 4. **Clean up:** on cancellation or deadline, request cancellation from the
@@ -40,18 +45,17 @@ agent code running in your application process. The framework and app code
 must respond to cancellation. Agent Supervisor can stop the separate local
 processes started through its APIs.
 
-Python exposes `AgentRunPolicy` and `AgentRunScope` for this lifecycle. The
-OpenAI Agents SDK, Microsoft Agent Framework, LangGraph, PydanticAI, and Google
-ADK adapters use that same public Python scope, backed by the native run-scope
-implementation.
+Python exposes `Supervisor.start_agent_run()` and `AgentRun` for custom
+integrations. The OpenAI Agents SDK, Microsoft Agent Framework, LangGraph,
+PydanticAI, and Google ADK adapters accept the top-level `supervisor` and
+create an `AgentRun` through it.
 All five adapters use a 300 second deadline and a 5 second shutdown grace
 period by default. Override them per call with
 `supervision={"timeout": 180, "shutdown_grace": 3}`.
 
 ## Install
 
-The framework run adapters are in the current repository source (0.2.0); the
-latest published Python package is 0.1.2 and does not include them yet. Install
+The framework run adapters are in the current 0.3.0 repository source. Install
 the adapter from a checkout as shown in its section below. The table lists
 each framework's SDK dependency:
 
@@ -96,11 +100,11 @@ Keep your other OpenAI imports, such as `from agents import Agent`, unchanged.
 Keep the rest of the `Agent` and `Runner.run(...)` code as it is. The adapter
 delegates the agent loop to the official OpenAI Runner and adds a 300 second
 default deadline with a 5 second cleanup grace period. Configure these per
-run with `supervision={"timeout": 120, "shutdown_grace": 2}`.
+run with `supervision={"timeout": 120, "shutdown_grace": 2}` and pass the
+application's manager as `supervisor=supervisor`.
 
-The adapter manages commands started through `agent_supervisor.run()`,
-`agent_supervisor.stream()`, or `Supervisor.start()` while the agent run is
-active. It stops those local processes when the run finishes, times out, or is
+The adapter manages commands started through `agent_supervisor.run()` or
+`Supervisor.start()` while the agent run is active. It stops those local processes when the run finishes, times out, or is
 cancelled. The OpenAI agent loop and model calls remain in your Python process;
 this adapter does not intercept arbitrary subprocess calls, Python code, or
 network requests made directly by your tools. Use the command APIs and their
@@ -115,7 +119,7 @@ loop; the tool function calls Agent Supervisor when the model selects it.
 import os
 import sys
 
-from agent_supervisor import Command, Policy, run
+from agent_supervisor import Command, Policy, Supervisor, run
 from agents import Agent
 from agent_supervisor.openai import Runner
 from agents.decorators import tool
@@ -150,7 +154,8 @@ agent = Agent(
 )
 
 # In your async application:
-# result = await Runner.run(agent, "Run the project tests")
+# supervisor = Supervisor()
+# result = await Runner.run(agent, "Run the project tests", supervisor=supervisor)
 ```
 
 ## LangGraph
@@ -162,7 +167,7 @@ them. Connect this node to the model node in your graph.
 import os
 import sys
 
-from agent_supervisor import Command, Policy, run
+from agent_supervisor import Command, Policy, Supervisor, run
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolNode
 
@@ -196,15 +201,17 @@ tool_node = ToolNode(tools)
 # After compiling the graph, wrap its normal async invocation:
 from agent_supervisor.langgraph import run as run_graph
 
+supervisor = Supervisor()
 result = await run_graph(
     graph,
     {"messages": [{"role": "user", "content": "Run the project tests."}]},
+    supervisor=supervisor,
     supervision={"timeout": 180, "shutdown_grace": 3},
 )
 ```
 
 For graph streaming, use the companion `stream` adapter. Closing the iterator
-also closes the run scope:
+also closes the `AgentRun`:
 
 ```python
 from agent_supervisor.langgraph import stream as stream_graph
@@ -223,7 +230,7 @@ arguments and calls it as part of its agent loop.
 import os
 import sys
 
-from agent_supervisor import Command, Policy, run
+from agent_supervisor import Command, Policy, Supervisor, run
 from pydantic_ai import Agent
 
 WORKSPACE = os.path.abspath(os.environ.get("PROJECT_WORKSPACE", "."))
@@ -257,8 +264,10 @@ agent = Agent(
 # Replace await agent.run(...) with the supervised adapter:
 from agent_supervisor.pydantic_ai import run as run_agent
 
+supervisor = Supervisor()
 result = await run_agent(
     agent, "Run the project tests.",
+    supervisor=supervisor,
     supervision={"timeout": 180, "shutdown_grace": 3},
 )
 ```
@@ -282,7 +291,7 @@ your application so it can apply your authorization rules before execution.
 import os
 import sys
 
-from agent_supervisor import Command, Policy, run
+from agent_supervisor import Command, Policy, Supervisor, run
 from google.adk.agents import LlmAgent
 
 WORKSPACE = os.path.abspath(os.environ.get("PROJECT_WORKSPACE", "."))
@@ -352,11 +361,12 @@ cd python
 python -m pip install -e '.[microsoft]'
 ```
 
-Wrap one framework invocation with `agent_supervisor.microsoft.run`. Keep your
-existing Microsoft `Agent`, tools, and model client. The timeout and cleanup
+Wrap one framework invocation with `agent_supervisor.microsoft.run`. Pass the
+application's `Supervisor` so it owns the run. Keep your existing Microsoft
+`Agent`, tools, and model client. The timeout and cleanup
 grace are 300 and 5 seconds by default. A timed out invocation receives
 cooperative asyncio cancellation; local commands started by its tools through
-`agent_supervisor` are cleaned up by the Rust run scope.
+`agent_supervisor` are cleaned up by the active `AgentRun`.
 
 The Microsoft Agent Framework also accepts a Python function as a tool. Add
 the function to your `Agent`; the framework handles model interaction and
@@ -366,7 +376,7 @@ tool selection.
 import os
 import sys
 
-from agent_supervisor import Command, Policy, run
+from agent_supervisor import Command, Policy, Supervisor, run
 from agent_supervisor.microsoft import run as run_supervised_agent
 from agent_framework import Agent
 from agent_framework.openai import OpenAIChatClient
@@ -401,16 +411,18 @@ agent = Agent(
     tools=[run_project_tests],
 )
 
-# Run the Microsoft agent inside one Agent Supervisor lifecycle scope.
+# Run the Microsoft agent under the application's Supervisor.
+supervisor = Supervisor()
 result = await run_supervised_agent(
     agent,
     "Run the project tests and report the result.",
+    supervisor=supervisor,
     supervision={"timeout": 180, "shutdown_grace": 3},
 )
 print(result.text)
 ```
 
-This scope supervises the **agent run inside the application process** and
+This `AgentRun` supervises the **agent call inside the application process** and
 processes started through Agent Supervisor's tool APIs. It does not put the
 agent code or model API calls in a separate OS process. For actual process
 isolation of the agent runtime, the agent framework and its client must run

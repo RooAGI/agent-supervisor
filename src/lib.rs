@@ -9,6 +9,7 @@ use std::path::PathBuf;
 mod agent_run;
 mod environment;
 mod error;
+mod event_log;
 mod events;
 mod filesystem;
 mod group;
@@ -26,9 +27,12 @@ mod wasm;
 #[cfg(windows)]
 mod windows_filesystem;
 
-pub use agent_run::{AgentRunPolicy, AgentRunScope};
+pub use agent_run::{AgentRun, AgentRunPolicy};
 pub use environment::{apply_environment_policy, validate_environment_policy, EnvironmentPolicy};
 pub use error::{SandboxError, SandboxErrorCode, SandboxPhase};
+pub use event_log::{
+    AgentEventPayload, EventStream, StreamScope, SupervisorEvent, SupervisorEventKind,
+};
 pub use events::{ProcessEvent, ProcessEventStream};
 pub use filesystem::{FilesystemAccess, FilesystemGrant, FilesystemPolicy};
 pub use group::{AdoptedProcess, ProcessGroup};
@@ -45,7 +49,8 @@ pub use pty::{PtyDimensions, PtySession};
 pub use runner::{execute_with_runner, NativeRunner, ProcessRunner};
 pub use supervisor::{
     execute, execute_with_cancellation, run, spawn, spawn_with_supervisor, wait_all, wait_any,
-    ExecutionOutput, SupervisedChild, Supervisor,
+    ExecutionOutput, ManagedProcessInfo, ManagedProcessResult, ManagedProcessStatus,
+    ProcessStopResult, SupervisedChild, Supervisor, SupervisorProcessId,
 };
 
 /// High-level command description shared with the Python API.

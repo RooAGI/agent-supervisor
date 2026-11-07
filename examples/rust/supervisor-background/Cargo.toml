@@ -1,0 +1,9 @@
+[package]
+name = "supervisor-background-example"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+agent-supervisor = { path = "../../.." }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

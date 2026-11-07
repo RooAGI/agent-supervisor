@@ -67,5 +67,21 @@ hide:
     <a class="text-link mcp-rust-link" href="supervisor-lifecycle/">See Rust process supervision <span aria-hidden="true">→</span></a>
   </section>
 
+  <section class="landing-section">
+    <div class="section-heading">
+      <p class="eyebrow">NEW IN 0.3.0 · BACKGROUND JOBS</p>
+      <h2>Start long-running processes.<br><span>Let the supervisor own them.</span></h2>
+      <p>A host-owned <code>Supervisor</code> can start background jobs under stable process IDs, drain output, observe exit, and keep the final receipt for later lookup. Watch any job or agent run live with <code>stream()</code>. Rust and Python expose the same lifecycle.</p>
+    </div>
+    <div class="feature-grid">
+      <article><span class="feature-number">01 / START</span><h3>Stable process IDs</h3><p>Start a job with <code>start_background()</code> and check status, wait for it, or remove its result by ID.</p></article>
+      <article><span class="feature-number">02 / CONTROL</span><h3>Per-job control</h3><p>Write to stdin, send EOF, or stop one job without affecting the others.</p></article>
+      <article><span class="feature-number">03 / AGENT RUNS</span><h3>Agent runs under the supervisor</h3><p>Create runs with <code>start_agent_run()</code>. Their tools share the supervisor's process registry and are cleaned up with the run.</p></article>
+      <article><span class="feature-number">04 / SHUTDOWN</span><h3>Awaited cleanup</h3><p>Call <code>shutdown_all()</code> to stop remaining jobs and active runs, and collect their final receipts.</p></article>
+    </div>
+    <a class="text-link" href="releases/0.3.0/">Read the 0.3.0 release notes <span aria-hidden="true">→</span></a>
+    <a class="text-link mcp-rust-link" href="supervisor-lifecycle/">See the supervisor lifecycle <span aria-hidden="true">→</span></a>
+  </section>
+
 
 </div>

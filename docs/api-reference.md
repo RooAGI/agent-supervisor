@@ -1,110 +1,199 @@
-# Core Concept
+# Core concepts
 
-Agent Supervisor provides two connected controls for agent applications:
-an **agent run** gets a deadline and cleanup lifecycle, while each **local
-tool process** gets its own command policy and process controls.
+Agent Supervisor has four layers. Each layer owns a different part of the
+lifecycle, and the [Rust API](rust-api.md) and [Python API](python-api.md) pages
+use the same layers.
 
-Your agent framework still runs the agent, makes model requests, and chooses
-which tool to call. Agent Supervisor does not sandbox the agent's code or model
-requests. It manages the run boundary and any local commands or MCP servers
-that your tool functions start through Agent Supervisor.
-
-This page explains the shared concepts and their Rust and Python names. For
-signatures and complete examples, see the [Rust API](rust-api.md) and
-[Python API](python-api.md).
-
-## Example: the agent runs project tests
-
-The app gives its agent one test-running tool. The framework decides when to
-call it; the tool function starts the test command through Agent Supervisor.
-The five-minute run deadline covers the whole agent call, while the 120-second
-timeout and output caps below apply only to the test command.
-
-```mermaid
-flowchart LR
-    subgraph run["One supervised agent run · 5 minute deadline"]
-        direction LR
-        app["Your app<br/>Runner.run(agent, prompt)"] --> sdk["Agent framework<br/>runs agent and model"]
-        sdk -->|"requests test tool"| tool["Tool function<br/>run_project_tests()"]
-        tool -->|"starts approved command"| supervisor["Agent Supervisor<br/>test command<br/>120 sec · output capped"]
-        supervisor -->|"exit status + bounded output"| tool
-        tool -->|"tool result"| sdk
-    end
-    deadline["Run cancelled or deadline reached"] -.-> cleanup["Request framework cancellation<br/>stop tracked tool processes"]
-    sdk -.-> cleanup
-    supervisor -. "after shutdown grace period" .-> cleanup
+```text
+Application            creates the framework and one Supervisor
+└── Supervisor         owns agent runs and background jobs
+    ├── AgentRun       one framework call and the tools it starts
+    │   └── Tool       local command or stdio MCP server process
+    └── Background job a process that can continue between agent runs
 ```
 
-At normal completion, the result returns through the tool to the agent. If the
-run is cancelled or reaches its deadline, Agent Supervisor requests
-cancellation from the framework and stops local processes it started after
-their shutdown grace period. This covers multiple tool calls and agent
-handoffs within the run. It does not take ownership of unrelated subprocesses.
-
-## Agent run lifecycle
-
-An agent run is one invocation of an agent framework, not the lifetime of an
-agent object or a separate agent operating-system process. The run scope wraps
-that invocation:
-
-| Stage | What happens |
-| --- | --- |
-| Start | Create a scope and start its overall deadline. |
-| Run | Let the framework execute turns, handoffs, and tools. Tool functions start local commands through Agent Supervisor; those processes are registered with the active scope. |
-| Finish | Observe the framework result, an error, caller cancellation, or the deadline. |
-| Clean up | On cancellation or deadline, request cancellation from the framework run. Then give tracked tool processes their shutdown grace period and stop any that remain. |
-
-Framework cancellation is cooperative. A deadline does not suspend or forcibly
-kill agent code running inside your application process. The framework and app
-code must respond to cancellation. Agent Supervisor can stop the separate
-local processes it started.
-
-| Run-level concept | Rust | Python |
+| Layer | Owns | Rust and Python API |
 | --- | --- | --- |
-| Run scope and defaults | `AgentRunScope`; `AgentRunPolicy` | `AgentRunScope`; `AgentRunPolicy` (also used by framework adapters) |
-| Overall deadline | `AgentRunPolicy.timeout` (default 300 seconds) | `supervision={"timeout": ...}` (default 300 seconds) |
-| Process cleanup grace | `AgentRunPolicy.shutdown_grace` (default 5 seconds) | `supervision={"shutdown_grace": ...}` (default 5 seconds) |
-| Cancel and clean up | `request_cancel()` then `cancel()`; or call `cancel()` directly | Adapter cancels the framework operation and cleans up at the deadline, cancellation, or completion |
+| **Application** | The agent framework, stored state, and the `Supervisor`. It decides which tool actions to allow. | Your code. There is no Agent Supervisor application type. |
+| **Supervisor** | Every agent run and local process it starts, plus background jobs. It cleans everything up at shutdown. | `Supervisor` in Rust and Python. It lives in your process and is not a daemon. |
+| **Agent** | One framework invocation: an overall deadline, cancellation, and the tools that call starts. | `supervisor.start_agent_run(policy)` returns an `AgentRun`; framework adapters do this for you. |
+| **Tool** | One local command or stdio MCP server, with its policy, limits, output, and result. | `Command`, `Policy`, `run`, `start`, and `RunResult` / `ProcessReceipt`. |
 
-Python framework adapters use the same Rust run scope and defaults. See
-[Agent SDK integrations](api-boundaries.md) for framework-specific imports and
-examples.
+The **agent** itself is the AI worker defined by your framework (instructions,
+model, and tools). The **framework**, for example the OpenAI Agents SDK,
+Microsoft Agent Framework, or LangGraph, runs the agent loop and invokes tool
+functions. Agent Supervisor does not replace the framework or run agent code in
+a separate process.
 
-## Local tool process lifecycle
+## Application
 
-Within a run, each local command or stdio MCP server has its own lifecycle:
+Your application creates the framework and one top-level `Supervisor`, passes
+the supervisor to each framework call, and shuts it down when the application
+exits. See the [Supervisor guide](supervisor-lifecycle.md#application-setup)
+for startup and shutdown examples in both languages.
+
+### Save framework state and background jobs
+
+The framework or application stores conversation sessions and graph
+checkpoints. Agent Supervisor does not store or restore that state. When a
+workflow resumes, load the framework's checkpoint and start a **new
+`AgentRun`** for the new framework invocation.
+
+| State or resource | Owner | What happens on resume or restart |
+| --- | --- | --- |
+| Framework session or checkpoint | Framework and application | The framework can load it for a new `AgentRun`. |
+| `SupervisorProcessId` | Application stores the token; the original `Supervisor` resolves it. | The same live supervisor can look up its job. A new supervisor reports the old ID as unavailable. |
+| Operating-system process | The live `Supervisor` | The supervisor stops its processes when the application exits. The token does not recreate a process. |
+
+`SupervisorProcessId` is a stable, serializable identity for a process in one
+supervisor. It is different from the framework's job ID and the operating
+system PID. After an application restart, parsing the old token still works,
+but lookup returns unavailable (`None` in the Rust and Python APIs). Do not
+automatically replay the command: it may have produced side effects before
+the process stopped. If a process must survive an application restart, a
+separate durable host service must own it.
+
+See the language API examples for saving and resolving the token:
+[Rust](rust-api.md#save-and-resume-background-jobs) ·
+[Python](python-api.md#save-and-resume-background-jobs).
+
+## Supervisor
+
+`Supervisor` is the application's in-process owner for agent runs and local
+child processes. It is not a daemon and does not keep jobs alive after the
+application exits; see [Supervisor lifecycle](supervisor-lifecycle.md).
+
+It manages two kinds of work:
+
+- **Agent runs**, created with `start_agent_run()`. Each run is cleaned up when
+  its framework call ends.
+- **Background jobs**, created with `start_background()`. A job belongs to the
+  supervisor, not to any one run, so it can continue between agent runs. Each
+  job is addressed by a `SupervisorProcessId`.
+
+### Input and output
+
+Choose how a process is started by how you need to talk to it:
+
+| Need | Input | Output | Past the output limit |
+| --- | --- | --- | --- |
+| One command, result at the end | One value passed to `run()` | Bounded stdout and stderr in the result | Stopped |
+| Interactive process | Write and close stdin at any time | Output events as they arrive | Stopped |
+| Background job | Write and close stdin by `SupervisorProcessId` | The newest output, read after the job finishes | Keeps running |
+
+See the language examples: [Rust](rust-api.md#input-and-output) ·
+[Python](python-api.md#input-and-output).
+
+### Watching work
+
+Starting work and watching it are separate. `run`, `start`, and
+`start_background` launch work; `Supervisor.stream()` only watches it, as one
+ordered stream of events. Stopping a watcher stops nothing.
+
+| Watch | Shows | Ends when |
+| --- | --- | --- |
+| One process | Its output and exit. | It exits. |
+| One agent run | The framework's events and its tools' output. | The run ends. |
+| Everything | All of the above. | The supervisor is dropped. |
+
+This stream is for your application. It is separate from what the model sees,
+which is still the tool's return value. See the language references:
+[Rust](rust-api.md#stream-output) · [Python](python-api.md#stream-output).
+
+When the application shuts down, `shutdown_all(grace)` cancels active agent
+runs, stops registered processes, and awaits the final results of background
+jobs.
+
+## Agent
+
+An **agent run** is one framework invocation. `Supervisor` creates an
+`AgentRun` for it. The run applies an overall deadline and cancellation
+boundary, and associates the local tool processes started for that invocation
+with the same cleanup boundary.
 
 ```mermaid
 flowchart LR
-    A[Describe command] --> B[Choose process policy]
-    B --> C[Run once or start a persistent process]
-    C --> D[Send input and receive output]
-    D --> E[Read result and termination]
+    app["Application"] --> supervisor["Supervisor"]
+    supervisor --> run["AgentRun<br/>one framework invocation"]
+    run --> framework["Agent framework"]
+    framework --> model["Model"]
+    framework --> tool["Application tool function"]
+    tool --> process["Local tool process"]
+    process --> tool --> framework
+    run -. "deadline or cancellation" .-> cleanup["Cancel framework call<br/>stop this run's tool processes"]
+    supervisor -. "application shutdown" .-> cleanup
 ```
 
-The run scope adds overall time and cleanup ownership around this process
-lifecycle. Per-process limits and policy still apply to each command. The
-public type names differ where Rust and Python API conventions differ.
+When an invocation is cancelled or reaches its deadline, framework cancellation
+is cooperative: the framework must respond to its cancellation mechanism.
+Agent Supervisor stops the separate local processes registered to that run
+after their configured shutdown grace. It cannot forcibly kill agent code
+running inside the application or stop a remote model request that ignores
+cancellation. Direct Rust integrations call `cancel().await` after normal
+completion; framework adapters perform that cleanup for you.
 
-## Lifecycle and terminology
+### Lifecycle of a resumable workflow
 
-| Step | Concept | Rust | Python |
+1. The application creates the `Supervisor`.
+2. For each framework call, it calls `supervisor.start_agent_run(policy)` and
+   runs the framework through the `AgentRun`.
+3. When the call ends, the run stops its own tool processes. Background jobs
+   keep running under the supervisor.
+4. To resume, the application loads the framework checkpoint and starts a new
+   `AgentRun`. It finds any background job through its saved
+   `SupervisorProcessId` on the same live `Supervisor`.
+
+For framework-specific examples, see
+[Agent SDK integrations](api-boundaries.md).
+
+## Tool
+
+The framework decides which tool to call. Your application implements the
+tool function and decides whether to allow the requested action. If that
+function starts a local command or stdio MCP server through Agent Supervisor,
+the supervisor applies the process policy, manages input and output, and
+reports how the process finished.
+
+```mermaid
+flowchart LR
+    framework["Agent framework"] --> tool["Application tool function"]
+    tool --> describe["Describe executable and arguments"]
+    describe --> policy["Choose process policy"]
+    policy --> launch["Start through AgentRun or Supervisor"]
+    launch --> process["Local process"]
+    process --> outcome["Output, exit status, termination"]
+    outcome --> tool --> framework
+```
+
+Choose the process API based on how long the tool should live:
+
+| Need | API | Who handles the process after launch |
+| --- | --- | --- |
+| Run one command and collect its result | Rust `run` / `execute`; Python `run` | The call collects bounded output and returns a result. |
+| Keep a process interactive for one agent run | Rust `AgentRun::start()` or `Supervisor::start()`; Python `AgentRun.start()` or `Supervisor.start()` | Your code uses the returned child/process handle for input, output, and waiting. In Rust, `into_event_stream()` also publishes output to supervisor watchers; raw pipes stay caller-owned. `Supervisor` can clean it up; `AgentRun` stops its own processes when that run ends. |
+| Let a process continue between agent runs | Rust `Supervisor::start_background()`; Python `Supervisor.start_background()` | `Supervisor` drains output, observes exit, reaps the process, and retains the result under a `SupervisorProcessId`. |
+
+For a background job, the process ID supports later status, result, input, and
+shutdown calls. `shutdown_process(id, grace)` requests that one process tree
+stop; `shutdown_all(grace)` stops the supervisor's jobs and awaits their final
+results. For interactive processes, `shutdown_all()` requests a stop; callers
+still use their child/process handles to drain output and observe the final
+result.
+
+### Process policy
+
+The command describes the executable, arguments, and optional working
+directory. The policy describes the environment and controls requested for
+that child. No shell is inserted automatically.
+
+| Concept | Meaning | Rust | Python |
 | --- | --- | --- | --- |
-| 1. Describe | The executable, arguments, and optional working directory. No shell is inserted. | `Command`; low-level execution can use `ExecutionRequest`, which also contains the policy. | `Command(argv, cwd=...)`; the binding builds the native request internally. |
-| 2. Configure | The environment and controls requested for the child. | `Policy` (`SandboxPolicy`) groups `EnvironmentPolicy`, `FilesystemPolicy`, `NetworkMode`, `ResourceLimits`, and `EnforcementRequirement`. | `Command` holds environment and time/byte limits. `Policy` holds filesystem, network, and enforcement settings. |
-| 3. Launch | Choose a bounded one-shot command or an interactive process. | `run` / `execute`; `Supervisor::start` for a persistent child. | `run` for one-shot; `stream` for one-shot output events; `Supervisor.start` for a persistent child. |
-| 4. Exchange | Send stdin and observe stdout/stderr while the process runs. | `ProcessEventStream`, `ProcessEvent`. | `Process`, `OutputEvent`. |
-| 5. Finish | Collect the outcome or stop a still-running child. | `ExecutionOutput` or `ProcessReceipt`; `TerminationReason`. | `RunResult`; `RunResult.termination`. |
-
-## What the policy concepts mean
-
-| Concept | Meaning | Rust term | Python term |
-| --- | --- | --- | --- |
-| Environment | The child starts with a cleared environment. Explicit variables and selected parent variables can be provided. | `EnvironmentPolicy` | `Command(env=..., inherit_env=...)` |
-| Filesystem policy | `None` means no filesystem restriction was requested. An explicit empty policy denies access; grants list allowed access under directory roots. | `FilesystemPolicy`, `FilesystemGrant`, `FilesystemAccess` | `Policy(filesystem=[(path, access)])` |
+| `ExecutionRequest` | Low-level executable, arguments, working directory, and policy to execute. | `ExecutionRequest` | Built internally from `Command` and `Policy`. |
+| Environment policy | Starts with a cleared environment; explicitly released variables can be added. | `EnvironmentPolicy` | `Command(env=..., inherit_env=...)` |
+| Filesystem policy | No restriction requested when omitted. An explicit empty policy denies access; grants list permitted access under directory roots. | `FilesystemPolicy`, `FilesystemGrant`, `FilesystemAccess` | `Policy(filesystem=[(path, access)])` |
 | Network mode | `Host` shares host networking. `Disabled` requests denial of IP networking while retaining local Unix IPC where supported. | `NetworkMode::{Host, Disabled}` | `Policy(network="host" or "disabled")` |
-| Resource limits | Bound runtime and stdin/stdout/stderr bytes. Rust also supports optional memory, process-count, and CPU limits. | `ResourceLimits` in `Policy` | `timeout` and `max_*_bytes` in `Command` |
-| Enforcement requirement | Says whether the child may start if a requested native control is unavailable. | `EnforcementRequirement::{BestEffort, Required}` | `Policy(enforcement="best_effort" or "required")` |
+| Resource limits | Bound one-shot runtime and stdin/stdout/stderr bytes. Rust also supports optional memory, process-count, and CPU limits. | `ResourceLimits` fields in `Policy` | `Command.timeout`, `max_stdin_bytes`, `max_stdout_bytes`, `max_stderr_bytes` |
+| Enforcement requirement | Determines whether launch may continue when a requested native control is unavailable. | `EnforcementRequirement::{BestEffort, Required}` | `Policy(enforcement="best_effort" or "required")` |
 
 Defaults are compatibility oriented: host networking, no requested filesystem
 restriction, and best-effort enforcement. Environment inheritance and numeric
@@ -112,45 +201,29 @@ limits follow each language API's documented defaults. Host operating systems
 provide different controls, so inspect platform capabilities when a particular
 restriction is required.
 
-## Results are different from requirements
+### Process results
 
-Two values answer different questions:
+Three values describe different parts of the outcome:
 
 - **Enforcement requirement** is part of the policy. `BestEffort` allows
   execution when a requested native control cannot be applied; `Required`
   makes launch fail in that case.
-- **Enforcement outcome** is part of the result. `Enforced`, `Degraded`,
-  `Unavailable`, or `Trusted` describes what the backend reports it applied.
-- **Termination** describes why the child stopped: for example, it exited,
+- **Enforcement outcome** reports what the backend says it applied:
+  `Enforced`, `Degraded`, `Unavailable`, or `Trusted`.
+- **Termination** describes why a process stopped: for example, it exited,
   timed out, was cancelled, or exceeded an output limit.
 
-Rust represents termination as `TerminationReason`; Python exposes string
-values through `RunResult.termination`. A nonzero exit is still an exited
-process, so check the exit status or result success field as well.
+Rust returns `ExecutionOutput`, `ProcessReceipt`, or a background-job result
+with `TerminationReason`. Python returns `RunResult` with
+`RunResult.termination`. A nonzero exit is still an exited process, so check
+its exit status or success field as well.
 
-## Process lifetime
+## API details
 
-One-shot execution starts the command, exchanges any provided input, collects
-bounded output, and returns a final result. Use it when the caller does not
-need to keep communicating with the process.
-
-A persistent process remains available for multiple input/output exchanges.
-Write bytes to stdin, close stdin to send EOF when finished, and keep reading
-output events until the terminal event. `wait()` collects the final summary;
-`shutdown(grace)` closes stdin, allows a short period for normal exit, and
-then stops the process tree if it remains alive. A `Command` runtime timeout
-applies to one-shot execution; persistent processes are stopped explicitly.
-
-Python's `stream()` is an output streaming mode for a one-shot command: it
-closes stdin immediately. Use `Supervisor.start()` and `Process` when a Python
-child needs interactive stdin.
-
-## Where to find API details
-
-- [Rust API](rust-api.md): Rust types, signatures, return values, cancellation,
-  persistent process methods, and examples.
-- [Python API](python-api.md): Python constructors, async methods, return
-  values, cancellation, platform capabilities, and examples.
+- [Rust API](rust-api.md): types, signatures, arguments, return values,
+  cancellation, and examples.
+- [Python API](python-api.md): constructors, methods, results, cancellation,
+  platform capabilities, and examples.
 - [Agent SDK integrations](api-boundaries.md): using the supervisor beneath
   popular agent frameworks.
 - [MCP servers](mcp.md): supervising stdio MCP server processes.
