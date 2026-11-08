@@ -21,6 +21,8 @@ mod probes;
 mod process_control;
 mod pty;
 mod runner;
+#[cfg(unix)]
+pub mod service;
 mod supervisor;
 pub mod tui;
 #[cfg(feature = "wasm")]

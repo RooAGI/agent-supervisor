@@ -1,0 +1,63 @@
+{
+  "content_hash": "sha256:9f331cf59e6c75c231715c74107a24e05365cfd45fdeff60935f5e475e27f789",
+  "issuer": "agentflow",
+  "snapshot": {
+    "board_template": {
+      "content_hash": "sha256:9c910b1a37c933969b026e31ff9795f745465c49acac8d9a0e156d7c748ca3cf",
+      "template_id": "project",
+      "version": 1
+    },
+    "content_hash": "sha256:9f331cf59e6c75c231715c74107a24e05365cfd45fdeff60935f5e475e27f789",
+    "coordinator_policy": "one_active_coordinator_with_fencing",
+    "description": "Plan a goal, create typed tasks, coordinate execution, and review completion.",
+    "name": "Project planning",
+    "requires_review": true,
+    "retry_policy": {
+      "max_attempts": 3
+    },
+    "stages": [
+      {
+        "description": "Clarify the goal and organize the work before execution.",
+        "id": "planning",
+        "name": "Planning",
+        "transitions_to": [
+          "execution"
+        ]
+      },
+      {
+        "description": "Complete the agreed work and record results in task posts.",
+        "id": "execution",
+        "name": "Execution",
+        "transitions_to": [
+          "review"
+        ]
+      },
+      {
+        "description": "Check the results and finish with evidence of acceptance.",
+        "id": "review",
+        "name": "Review",
+        "transitions_to": []
+      }
+    ],
+    "template_id": "project-planning",
+    "transitions": [
+      {
+        "event": "stage_changed",
+        "from_stage": "planning",
+        "requires_coordinator": true,
+        "requires_reviewer": false,
+        "to_stage": "execution"
+      },
+      {
+        "event": "stage_changed",
+        "from_stage": "execution",
+        "requires_coordinator": true,
+        "requires_reviewer": false,
+        "to_stage": "review"
+      }
+    ],
+    "version": 1
+  },
+  "template_id": "project-planning",
+  "version": 1
+}

@@ -1,0 +1,3 @@
+# Flowboard settings for rooagi-sandbox.
+workspace_root = "/Users/louis/sources/rooagi-sandbox"
+dashboard_bind = "127.0.0.1:8468"

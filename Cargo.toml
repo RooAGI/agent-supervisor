@@ -13,7 +13,7 @@ exclude = ["dev/**", "python/**"]
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 thiserror = "1"
-tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt", "rt-multi-thread", "sync", "time"] }
 tokio-util = "0.7"
 portable-pty = "0.9"
 wasmi = { version = "2", optional = true }
@@ -56,3 +56,7 @@ wat = "1"
 name = "mcp-stdio-fixture"
 path = "tests/fixtures/mcp_stdio_fixture.rs"
 test = false
+
+[[bin]]
+name = "agent-supervisor-service"
+path = "src/bin/agent-supervisor-service.rs"

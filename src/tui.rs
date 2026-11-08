@@ -108,6 +108,18 @@ pub struct TuiProcess {
     pub executable: Option<String>,
     pub framework: Option<String>,
     pub run_label: Option<String>,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub flow_run_id: Option<String>,
+    #[serde(default)]
+    pub task_id: Option<String>,
+    #[serde(default)]
+    pub post_id: Option<String>,
+    #[serde(default)]
+    pub worker_id: Option<String>,
+    #[serde(default)]
+    pub runtime_run_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,6 +141,12 @@ impl From<&ManagedProcessInfo> for TuiProcess {
                 .map(|path| path.to_string_lossy().into_owned()),
             framework: process.framework.clone(),
             run_label: process.run_label.clone(),
+            project_id: process.project_id.clone(),
+            flow_run_id: process.flow_run_id.clone(),
+            task_id: process.task_id.clone(),
+            post_id: process.post_id.clone(),
+            worker_id: process.worker_id.clone(),
+            runtime_run_id: process.runtime_run_id.clone(),
         }
     }
 }
@@ -574,6 +592,32 @@ mod tests {
     async fn client_response<R: AsyncRead + Unpin>(reader: &mut R) -> TuiResponse {
         let payload = read_frame(reader).await.unwrap();
         serde_json::from_slice(&payload).unwrap()
+    }
+
+    #[test]
+    fn process_context_roundtrips_through_tui_protocol() {
+        let response = TuiResponse::ProcessChanged {
+            version: PROTOCOL_VERSION,
+            event_id: 7,
+            process: TuiProcess {
+                process_id: "v1:supervisor:1".into(),
+                pid: 42,
+                alive: true,
+                executable: Some("/usr/bin/agent".into()),
+                framework: Some("LangGraph".into()),
+                run_label: Some("support-agent".into()),
+                project_id: Some("project-a".into()),
+                flow_run_id: Some("flow-12".into()),
+                task_id: Some("task-17".into()),
+                post_id: Some("post-17".into()),
+                worker_id: Some("worker-1".into()),
+                runtime_run_id: Some("runtime-2".into()),
+            },
+        };
+
+        let json = serde_json::to_vec(&response).unwrap();
+        let decoded: TuiResponse = serde_json::from_slice(&json).unwrap();
+        assert_eq!(decoded, response);
     }
 
     #[tokio::test]

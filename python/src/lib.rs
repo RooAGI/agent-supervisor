@@ -1,13 +1,12 @@
 mod mcp_stdio;
 
 use agent_supervisor::{
-    execute_with_cancellation, Enforcement, EnforcementRequirement,
-    EnvironmentPolicy, EventStream as CoreEventStream, ExecutionRequest, FilesystemAccess,
-    FilesystemGrant, FilesystemPolicy, ManagedProcessMetadata, ManagedProcessResult,
-    ManagedProcessStatus, NetworkMode,
-    PlatformCapabilities, ProcessEvent, ProcessEventStream, ProcessReceipt, ProcessStopResult,
-    ResourceLimits, SandboxError, SandboxPolicy, StreamScope, Supervisor as RustSupervisor,
-    SupervisorEvent as CoreSupervisorEvent, SupervisorEventKind,
+    execute_with_cancellation, Enforcement, EnforcementRequirement, EnvironmentPolicy,
+    EventStream as CoreEventStream, ExecutionRequest, FilesystemAccess, FilesystemGrant,
+    FilesystemPolicy, ManagedProcessMetadata, ManagedProcessResult, ManagedProcessStatus,
+    NetworkMode, PlatformCapabilities, ProcessEvent, ProcessEventStream, ProcessReceipt,
+    ProcessStopResult, ResourceLimits, SandboxError, SandboxPolicy, StreamScope,
+    Supervisor as RustSupervisor, SupervisorEvent as CoreSupervisorEvent, SupervisorEventKind,
     SupervisorProcessId as RustSupervisorProcessId, TerminationReason,
 };
 use pyo3::class::basic::CompareOp;
@@ -705,7 +704,7 @@ impl AgentRunHandle {
         })
     }
 
-    #[pyo3(signature = (command, *, policy=None, framework=None, run_label=None))]
+    #[pyo3(signature = (command, *, policy=None, framework=None, run_label=None, project_id=None, flow_run_id=None, task_id=None, post_id=None, worker_id=None, runtime_run_id=None))]
     fn start<'py>(
         &self,
         py: Python<'py>,
@@ -713,9 +712,17 @@ impl AgentRunHandle {
         policy: Option<PyRef<'py, Policy>>,
         framework: Option<String>,
         run_label: Option<String>,
+        project_id: Option<String>,
+        flow_run_id: Option<String>,
+        task_id: Option<String>,
+        post_id: Option<String>,
+        worker_id: Option<String>,
+        runtime_run_id: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let request = request_from(&command.clone(), policy.as_deref());
         let metadata = ManagedProcessMetadata::new(framework, run_label)
+            .and_then(|m| m.with_flow_context(project_id, flow_run_id, task_id))
+            .and_then(|m| m.with_work_identity(post_id, worker_id, runtime_run_id))
             .map_err(PyValueError::new_err)?;
         let supervisor = self.supervisor.clone();
         let inner = self.inner.clone();
@@ -837,7 +844,7 @@ impl SupervisorHandle {
         })
     }
 
-    #[pyo3(signature = (command, *, policy=None, framework=None, run_label=None))]
+    #[pyo3(signature = (command, *, policy=None, framework=None, run_label=None, project_id=None, flow_run_id=None, task_id=None, post_id=None, worker_id=None, runtime_run_id=None))]
     fn start_background<'py>(
         &self,
         py: Python<'py>,
@@ -845,9 +852,17 @@ impl SupervisorHandle {
         policy: Option<PyRef<'py, Policy>>,
         framework: Option<String>,
         run_label: Option<String>,
+        project_id: Option<String>,
+        flow_run_id: Option<String>,
+        task_id: Option<String>,
+        post_id: Option<String>,
+        worker_id: Option<String>,
+        runtime_run_id: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let request = request_from(&command.clone(), policy.as_deref());
         let metadata = ManagedProcessMetadata::new(framework, run_label)
+            .and_then(|m| m.with_flow_context(project_id, flow_run_id, task_id))
+            .and_then(|m| m.with_work_identity(post_id, worker_id, runtime_run_id))
             .map_err(PyValueError::new_err)?;
         let command = agent_supervisor::Command {
             argv: std::iter::once(request.executable.display().to_string())
@@ -888,9 +903,18 @@ impl SupervisorHandle {
         result.set_item("process_id", info.supervisor_id.to_string())?;
         result.set_item("pid", info.process_id)?;
         result.set_item("alive", info.alive)?;
-        result.set_item("executable", info.executable.map(|path| path.display().to_string()))?;
+        result.set_item(
+            "executable",
+            info.executable.map(|path| path.display().to_string()),
+        )?;
         result.set_item("framework", info.framework)?;
         result.set_item("run_label", info.run_label)?;
+        result.set_item("project_id", info.project_id)?;
+        result.set_item("flow_run_id", info.flow_run_id)?;
+        result.set_item("task_id", info.task_id)?;
+        result.set_item("post_id", info.post_id)?;
+        result.set_item("worker_id", info.worker_id)?;
+        result.set_item("runtime_run_id", info.runtime_run_id)?;
         Ok(Some(result))
     }
 
@@ -1007,7 +1031,7 @@ impl SupervisorHandle {
         })
     }
 
-    #[pyo3(signature = (command, *, policy=None, framework=None, run_label=None))]
+    #[pyo3(signature = (command, *, policy=None, framework=None, run_label=None, project_id=None, flow_run_id=None, task_id=None, post_id=None, worker_id=None, runtime_run_id=None))]
     fn start<'py>(
         &self,
         py: Python<'py>,
@@ -1015,9 +1039,17 @@ impl SupervisorHandle {
         policy: Option<PyRef<'py, Policy>>,
         framework: Option<String>,
         run_label: Option<String>,
+        project_id: Option<String>,
+        flow_run_id: Option<String>,
+        task_id: Option<String>,
+        post_id: Option<String>,
+        worker_id: Option<String>,
+        runtime_run_id: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let request = request_from(&command.clone(), policy.as_deref());
         let metadata = ManagedProcessMetadata::new(framework, run_label)
+            .and_then(|m| m.with_flow_context(project_id, flow_run_id, task_id))
+            .and_then(|m| m.with_work_identity(post_id, worker_id, runtime_run_id))
             .map_err(PyValueError::new_err)?;
         let supervisor = self.inner.clone();
         future_into_py(py, async move {

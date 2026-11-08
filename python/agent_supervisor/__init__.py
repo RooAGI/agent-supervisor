@@ -57,20 +57,25 @@ class Supervisor:
         """
         return await self._native.start_tui(executable, args=list(args))
 
-    async def start(self, command, *, policy=None, framework=None, run_label=None):
+    async def start(self, command, *, policy=None, framework=None, run_label=None, project_id=None, flow_run_id=None, task_id=None, post_id=None, worker_id=None, runtime_run_id=None):
         """Start a persistent child and return its interactive Process handle.
 
-        Optional ``framework`` and ``run_label`` values appear in supervisor
-        process snapshots and the TUI. Each label is limited to 128 UTF-8 bytes
-        and cannot contain terminal control characters.
+        Optional framework, run label, FlowRun/task, post, worker, and runtime
+        run IDs appear separately in process snapshots and the TUI. Descriptive
+        labels are limited to 128 UTF-8 bytes; structured ``post_id`` values
+        may be up to 2048 bytes. All values reject terminal controls.
         """
         run = _current_run_context()
         if run is not None:
             return await run.start(
-                command, policy=policy, framework=framework, run_label=run_label
+                command, policy=policy, framework=framework, run_label=run_label,
+                project_id=project_id, flow_run_id=flow_run_id, task_id=task_id,
+                post_id=post_id, worker_id=worker_id, runtime_run_id=runtime_run_id
             )
         return await self._native.start(
-            command, policy=policy, framework=framework, run_label=run_label
+            command, policy=policy, framework=framework, run_label=run_label,
+            project_id=project_id, flow_run_id=flow_run_id, task_id=task_id,
+            post_id=post_id, worker_id=worker_id, runtime_run_id=runtime_run_id
         )
 
     def stream(self, *, run=None, process=None):
@@ -93,7 +98,7 @@ class Supervisor:
         native_run = run._native if run is not None else None
         return self._native.stream(run=native_run, process=process)
 
-    async def start_background(self, command, *, policy=None, framework=None, run_label=None):
+    async def start_background(self, command, *, policy=None, framework=None, run_label=None, project_id=None, flow_run_id=None, task_id=None, post_id=None, worker_id=None, runtime_run_id=None):
         """Start a manager-owned job and return its stable SupervisorProcessId.
 
         Persistent jobs are stopped explicitly with ``shutdown_process`` or
@@ -101,13 +106,15 @@ class Supervisor:
         The command's stdout and stderr byte limits still apply. Optional
         ``framework`` and ``run_label`` values appear in process snapshots and
         the TUI. Each label is limited to 128 UTF-8 bytes and cannot contain
-        terminal control characters.
+        terminal controls; structured post IDs support up to 2048 UTF-8 bytes.
         """
         return await self._native.start_background(
             command,
             policy=policy,
             framework=framework,
             run_label=run_label,
+            project_id=project_id, flow_run_id=flow_run_id, task_id=task_id,
+            post_id=post_id, worker_id=worker_id, runtime_run_id=runtime_run_id,
         )
 
     def process_status(self, process_id):

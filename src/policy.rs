@@ -307,6 +307,13 @@ pub enum LifecycleEvent {
         process_id: u32,
         executable: ExecutableIdentity,
     },
+    /// Trusted context supplied by the host when the process was registered.
+    /// This is informational and distinct from the reusable OS PID.
+    ProcessContext {
+        supervisor_process_id: crate::SupervisorProcessId,
+        process_id: u32,
+        metadata: crate::ManagedProcessMetadata,
+    },
     Exited {
         process_id: u32,
         termination: TerminationReason,

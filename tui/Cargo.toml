@@ -7,4 +7,7 @@ publish = false
 [dependencies]
 agent-supervisor = { path = ".." }
 serde_json = "1"
-tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

@@ -5,6 +5,15 @@ Create an `AgentRun` through `Supervisor.start_agent_run()` for each framework
 call. The supervisor tracks that run's tools and can also own background jobs
 that continue between calls. The framework still runs the agent and makes
 model requests; Agent Supervisor does not sandbox Python code or model calls.
+When a host starts a process for a Flowboard task, it can pass optional
+`project_id`, `flow_run_id`, `task_id`, `post_id`, `worker_id`, and
+`runtime_run_id` values to `Supervisor.start()`, `Supervisor.start_background()`,
+or `AgentRun.start()`. These trusted host values remain distinct from
+`framework` and `run_label` in process snapshots and the process manager TUI.
+They are informational; process control still uses the Supervisor-scoped
+process ID. Descriptive labels and worker/runtime IDs are limited to 128 UTF-8
+bytes; structured `post_id` values support 2048 bytes. Every value rejects
+terminal controls.
 
 For the shared concepts and Rust/Python type mapping, see [Core concepts](api-reference.md). For framework-specific examples, see [Agent SDK
 integrations](api-boundaries.md).

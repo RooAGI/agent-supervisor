@@ -1,0 +1,11 @@
+{
+  "name": "@rooagi/agent-supervisor-node",
+  "version": "0.3.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.mjs"
+    }
+  }
+}

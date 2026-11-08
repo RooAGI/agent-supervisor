@@ -7,6 +7,9 @@ use tokio::io::{stdin, stdout};
 use tokio::sync::mpsc;
 use tokio::time::{interval, timeout};
 
+#[cfg(unix)]
+mod service_client;
+
 const REFRESH_PERIOD: Duration = Duration::from_secs(1);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -33,6 +36,71 @@ async fn main() {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if args.iter().any(|arg| arg == "--service-socket") {
+        #[cfg(unix)]
+        {
+            let options = ServiceOptions::parse(&args)?;
+            let (protocol, bridge) =
+                service_client::connect(&options.socket, &options.token_file, &options.role)
+                    .await?;
+            let (reader, writer) = tokio::io::split(protocol);
+            let result = run_with_protocol(reader, writer, options.role == "tui").await;
+            bridge.abort();
+            return result;
+        }
+        #[cfg(not(unix))]
+        return Err("service-client mode currently requires Unix sockets".into());
+    }
+    if !args.is_empty() {
+        return Err("usage: agent-supervisor-tui [--service-socket PATH --token-file PATH [--role view|control]]".into());
+    }
+    run_with_protocol(stdin(), stdout(), true).await
+}
+
+#[cfg(unix)]
+struct ServiceOptions {
+    socket: std::path::PathBuf,
+    token_file: std::path::PathBuf,
+    role: String,
+}
+
+#[cfg(unix)]
+impl ServiceOptions {
+    fn parse(args: &[String]) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut socket = None;
+        let mut token_file = None;
+        let mut role = "view".to_owned();
+        let mut args = args.iter();
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "--service-socket" => socket = args.next().map(std::path::PathBuf::from),
+                "--token-file" => token_file = args.next().map(std::path::PathBuf::from),
+                "--role" => role = args.next().ok_or("--role requires a value")?.clone(),
+                "--help" | "-h" => return Err("usage: agent-supervisor-tui --service-socket PATH --token-file PATH [--role view|tui]".into()),
+                _ => return Err(format!("unknown argument: {arg}").into()),
+            }
+        }
+        if role != "view" && role != "tui" {
+            return Err("--role must be view or tui".into());
+        }
+        Ok(Self {
+            socket: socket.ok_or("--service-socket is required")?,
+            token_file: token_file.ok_or("--token-file is required")?,
+            role,
+        })
+    }
+}
+
+async fn run_with_protocol<R, W>(
+    protocol_in: R,
+    mut protocol_out: W,
+    can_control: bool,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+    W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     let (terminal_in, mut terminal_out) = open_terminal()?;
     let (input_tx, mut input_rx) = mpsc::channel::<String>(8);
     std::thread::spawn(move || {
@@ -50,9 +118,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let mut protocol_out = stdout();
     let (response_tx, mut response_rx) = mpsc::channel(64);
-    tokio::spawn(read_responses(stdin(), response_tx));
+    tokio::spawn(read_responses(protocol_in, response_tx));
     write_frame(
         &mut protocol_out,
         &TuiRequest::Hello {
@@ -128,6 +195,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             detail,
             confirmation,
             &notice,
+            can_control,
         )?;
 
         tokio::select! {
@@ -232,7 +300,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     "i" | "info" => detail = !detail,
                     "s" | "stop" => {
-                        if processes.get(selected).is_some() {
+                        if !can_control {
+                            notice = "This TUI connection has view-only permission.".into();
+                        } else if processes.get(selected).is_some() {
                             confirmation = Some(Confirmation::Stop(selected));
                             notice = format!("Stop process #{}? Type y to confirm, anything else to cancel.", selected + 1);
                         } else {
@@ -240,7 +310,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     "a" | "all" => {
-                        if processes.is_empty() {
+                        if !can_control {
+                            notice = "This TUI connection has view-only permission.".into();
+                        } else if processes.is_empty() {
                             notice = "No managed processes are running.".into();
                         } else {
                             confirmation = Some(Confirmation::StopAll);
@@ -256,7 +328,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                             notice = "A supervisor request is already in progress.".into();
                         }
                     }
-                    "?" | "help" => notice = "Commands: j/k move, i details, s stop selected, a stop all, r refresh, q quit.".into(),
+                    "?" | "help" => notice = if can_control { "Commands: j/k move, i details, s stop selected, a stop all, r refresh, q quit." } else { "Commands: j/k move, i details, r refresh, q quit." }.into(),
                     _ => notice = "Unknown command. Type ? for help.".into(),
                 }
             }
@@ -348,6 +420,7 @@ fn draw(
     detail: bool,
     confirmation: Option<Confirmation>,
     notice: &str,
+    can_control: bool,
 ) -> io::Result<()> {
     write!(output, "\x1b[2J\x1b[H")?;
     writeln!(output, "Agent Supervisor · managed processes")?;
@@ -365,8 +438,19 @@ fn draw(
     if processes.is_empty() {
         writeln!(output, "     (no processes are currently managed)")?;
     } else {
-        for (index, process) in processes.iter().enumerate() {
-            let marker = if index == selected { ">" } else { " " };
+        let mut ordered = processes.iter().enumerate().collect::<Vec<_>>();
+        ordered.sort_by(|(_, a), (_, b)| {
+            a.project_id
+                .cmp(&b.project_id)
+                .then(a.flow_run_id.cmp(&b.flow_run_id))
+                .then(a.task_id.cmp(&b.task_id))
+                .then(a.post_id.cmp(&b.post_id))
+                .then(a.worker_id.cmp(&b.worker_id))
+                .then(a.runtime_run_id.cmp(&b.runtime_run_id))
+                .then(a.pid.cmp(&b.pid))
+        });
+        for (row_index, (original_index, process)) in ordered.into_iter().enumerate() {
+            let marker = if original_index == selected { ">" } else { " " };
             let status = if process.alive { "running" } else { "exited " };
             let framework = process.framework.as_deref().unwrap_or("-");
             let command = process
@@ -377,7 +461,7 @@ fn draw(
             writeln!(
                 output,
                 "{marker} {:>2} {status}  {:>8}  {:<13.13}  {}",
-                index + 1,
+                row_index + 1,
                 process.pid,
                 framework,
                 sanitize(command, 56)
@@ -410,6 +494,39 @@ fn draw(
             )?;
             writeln!(
                 output,
+                "  project:       {}",
+                sanitize(process.project_id.as_deref().unwrap_or("not provided"), 80)
+            )?;
+            writeln!(
+                output,
+                "  FlowRun:       {}",
+                sanitize(process.flow_run_id.as_deref().unwrap_or("not provided"), 80)
+            )?;
+            writeln!(
+                output,
+                "  task:          {}",
+                sanitize(process.task_id.as_deref().unwrap_or("not provided"), 80)
+            )?;
+            writeln!(
+                output,
+                "  task post:     {}",
+                sanitize(process.post_id.as_deref().unwrap_or("not provided"), 96)
+            )?;
+            writeln!(
+                output,
+                "  worker:        {}",
+                sanitize(process.worker_id.as_deref().unwrap_or("not provided"), 96)
+            )?;
+            writeln!(
+                output,
+                "  runtime run:   {}",
+                sanitize(
+                    process.runtime_run_id.as_deref().unwrap_or("not provided"),
+                    96
+                )
+            )?;
+            writeln!(
+                output,
                 "  state:         {}",
                 if process.alive { "running" } else { "exited" }
             )?;
@@ -419,10 +536,17 @@ fn draw(
     if confirmation.is_some() {
         write!(output, "confirm > ")?;
     } else {
-        write!(
-            output,
-            "command [j/k move, i details, s stop, a stop all, r refresh, q quit, ? help] > "
-        )?;
+        if can_control {
+            write!(
+                output,
+                "command [j/k move, i details, s stop, a stop all, r refresh, q quit, ? help] > "
+            )?;
+        } else {
+            write!(
+                output,
+                "command [j/k move, i details, r refresh, q quit, ? help] > "
+            )?;
+        }
     }
     output.flush()
 }
@@ -460,7 +584,7 @@ fn open_terminal() -> io::Result<(std::fs::File, std::fs::File)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_event, read_responses, sanitize};
+    use super::{apply_event, draw, read_responses, sanitize};
     use agent_supervisor::tui::{read_frame, write_frame, TuiProcess, TuiRequest, TuiResponse};
     use tokio::io::duplex;
 
@@ -468,6 +592,16 @@ mod tests {
     fn sanitize_removes_terminal_control_characters_and_bounds_text() {
         assert_eq!(sanitize("ok\x1b[31mBAD\n", 8), "ok[31mBA");
         assert_eq!(sanitize("abcdef", 3), "abc");
+    }
+
+    #[test]
+    fn view_only_tui_prompt_does_not_offer_stop_controls() {
+        let mut output = Vec::new();
+        draw(&mut output, &[], 0, false, None, "Connected", false).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("j/k move, i details, r refresh"));
+        assert!(!output.contains("s stop"));
+        assert!(!output.contains("a stop all"));
     }
 
     #[tokio::test]
@@ -502,6 +636,12 @@ mod tests {
                 executable: Some("agent-worker".into()),
                 framework: Some("LangGraph".into()),
                 run_label: Some("research".into()),
+                project_id: Some("demo-project".into()),
+                flow_run_id: Some("flow-demo".into()),
+                task_id: Some("task-17".into()),
+                post_id: Some("post-17".into()),
+                worker_id: Some("worker-1".into()),
+                runtime_run_id: Some("runtime-2".into()),
             };
             write_frame(
                 &mut server_writer,

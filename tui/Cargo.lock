@@ -25,6 +25,7 @@ name = "agent-supervisor-tui"
 version = "0.1.0"
 dependencies = [
  "agent-supervisor",
+ "libc",
  "serde_json",
  "tokio",
 ]
