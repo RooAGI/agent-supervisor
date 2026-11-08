@@ -90,9 +90,16 @@ class AgentRun:
         """Run one bounded local command within the remaining run deadline."""
         return await self._native.run(command, policy=policy, input=input)
 
-    async def start(self, command, *, policy=None):
-        """Start a persistent local process owned by this agent run."""
-        return await self._native.start(command, policy=policy)
+    async def start(self, command, *, policy=None, framework=None, run_label=None):
+        """Start a persistent local process owned by this agent run.
+
+        Optional ``framework`` and ``run_label`` values appear in supervisor
+        process snapshots and the TUI. Each label is limited to 128 UTF-8 bytes
+        and cannot contain terminal control characters.
+        """
+        return await self._native.start(
+            command, policy=policy, framework=framework, run_label=run_label
+        )
 
     @property
     def id(self):

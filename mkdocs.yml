@@ -45,6 +45,8 @@ nav:
   - Supervisor:
       - Supervisor: supervisor-lifecycle.md
       - Security model: security-model.md
+      - TUI control protocol: supervisor-tui-protocol.md
+      - Terminal process manager: tui.md
       - Testing and coverage: testing.md
   - Agent:
       - Agent runs and SDK adapters: api-boundaries.md

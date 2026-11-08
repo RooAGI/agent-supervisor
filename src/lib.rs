@@ -22,6 +22,7 @@ mod process_control;
 mod pty;
 mod runner;
 mod supervisor;
+pub mod tui;
 #[cfg(feature = "wasm")]
 mod wasm;
 #[cfg(windows)]
@@ -49,8 +50,8 @@ pub use pty::{PtyDimensions, PtySession};
 pub use runner::{execute_with_runner, NativeRunner, ProcessRunner};
 pub use supervisor::{
     execute, execute_with_cancellation, run, spawn, spawn_with_supervisor, wait_all, wait_any,
-    ExecutionOutput, ManagedProcessInfo, ManagedProcessResult, ManagedProcessStatus,
-    ProcessStopResult, SupervisedChild, Supervisor, SupervisorProcessId,
+    ExecutionOutput, ManagedProcessInfo, ManagedProcessMetadata, ManagedProcessResult,
+    ManagedProcessStatus, ProcessStopResult, SupervisedChild, Supervisor, SupervisorProcessId,
 };
 
 /// High-level command description shared with the Python API.

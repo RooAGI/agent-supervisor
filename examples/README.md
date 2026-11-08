@@ -8,6 +8,8 @@ Supervisor ID, inspect its final output and status, and await cleanup.
 
 - [`supervisor-background/`](rust/supervisor-background/): runnable example
   for manager-owned background jobs.
+- [`supervisor-tui/`](rust/supervisor-tui/): launches the separate terminal
+  process manager with framework-labelled jobs.
 - [`rmcp-server/`](rust/rmcp-server/): Rust MCP server using `rmcp`.
 
 Run the background-job example from its project directory:
@@ -24,6 +26,8 @@ system-specific shell or interpreter.
 
 - [`supervisor_background_jobs.py`](python/supervisor_background_jobs.py):
   manager-owned background jobs.
+- [`supervisor_tui.py`](python/supervisor_tui.py): launch the separate TUI
+  with framework-labelled jobs and stop one from the dashboard.
 - [`official_mcp_server.py`](python/official_mcp_server.py): official MCP SDK.
 - [`prefect_fastmcp_server.py`](python/prefect_fastmcp_server.py): Prefect
   FastMCP.
@@ -34,6 +38,15 @@ from the repository root:
 ```bash
 python -m pip install -e ./python
 python examples/python/supervisor_background_jobs.py
+```
+
+For the Python TUI example, also build the standalone Rust executable and set
+its path:
+
+```bash
+cargo build --manifest-path tui/Cargo.toml --release
+AGENT_SUPERVISOR_TUI="$PWD/tui/target/release/agent-supervisor-tui" \
+  python examples/python/supervisor_tui.py
 ```
 
 For MCP examples, install the matching server SDK from the repository root:

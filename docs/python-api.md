@@ -152,6 +152,36 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
+### Launch the terminal process manager
+
+Build the standalone TUI binary as described in the
+[TUI guide](tui.md#build-the-tui), then launch it from the supervisor. The TUI
+uses the application's controlling terminal for keyboard and screen I/O;
+standard input and output are reserved for its private supervisor protocol.
+
+```text
+async def start_tui(executable, *, args=()) -> None
+```
+
+```python
+import asyncio
+import os
+from pathlib import Path
+from agent_supervisor import Supervisor
+
+async def main():
+    supervisor = Supervisor()
+    tui = Path(os.environ["AGENT_SUPERVISOR_TUI"])
+    await supervisor.start_tui(tui)
+
+asyncio.run(main())
+```
+
+The `Supervisor` launches and owns this separate TUI process, then stops it
+when the supervisor is dropped. See the
+[Python TUI example](../examples/python/supervisor_tui.py) for launching the
+dashboard with multiple framework-labelled background jobs.
+
 See the runnable [Python background-job example](https://github.com/RooAGI/agent-supervisor/blob/main/examples/python/supervisor_background_jobs.py).
 
 #### Input and output

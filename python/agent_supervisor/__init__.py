@@ -47,12 +47,31 @@ class Supervisor:
         """Return the number of child processes registered with this supervisor."""
         return self._native.active_processes()
 
-    async def start(self, command, *, policy=None):
-        """Start a persistent child and return its interactive Process handle."""
+    async def start_tui(self, executable, *, args=()):
+        """Launch the separate terminal process manager owned by this supervisor.
+
+        The executable must implement the Agent Supervisor TUI protocol and
+        attach to its controlling terminal. Its standard input/output are
+        reserved for the private protocol pipes. The supervisor stops the TUI
+        when the owner is dropped.
+        """
+        return await self._native.start_tui(executable, args=list(args))
+
+    async def start(self, command, *, policy=None, framework=None, run_label=None):
+        """Start a persistent child and return its interactive Process handle.
+
+        Optional ``framework`` and ``run_label`` values appear in supervisor
+        process snapshots and the TUI. Each label is limited to 128 UTF-8 bytes
+        and cannot contain terminal control characters.
+        """
         run = _current_run_context()
         if run is not None:
-            return await run.start(command, policy=policy)
-        return await self._native.start(command, policy=policy)
+            return await run.start(
+                command, policy=policy, framework=framework, run_label=run_label
+            )
+        return await self._native.start(
+            command, policy=policy, framework=framework, run_label=run_label
+        )
 
     def stream(self, *, run=None, process=None):
         """Watch this supervisor's work as one ordered stream of events.
@@ -74,18 +93,30 @@ class Supervisor:
         native_run = run._native if run is not None else None
         return self._native.stream(run=native_run, process=process)
 
-    async def start_background(self, command, *, policy=None):
+    async def start_background(self, command, *, policy=None, framework=None, run_label=None):
         """Start a manager-owned job and return its stable SupervisorProcessId.
 
         Persistent jobs are stopped explicitly with ``shutdown_process`` or
         ``shutdown_all``; ``Command.timeout`` does not end a background job.
-        The command's stdout and stderr byte limits still apply.
+        The command's stdout and stderr byte limits still apply. Optional
+        ``framework`` and ``run_label`` values appear in process snapshots and
+        the TUI. Each label is limited to 128 UTF-8 bytes and cannot contain
+        terminal control characters.
         """
-        return await self._native.start_background(command, policy=policy)
+        return await self._native.start_background(
+            command,
+            policy=policy,
+            framework=framework,
+            run_label=run_label,
+        )
 
     def process_status(self, process_id):
         """Return ``running``, ``completed``, ``failed``, or ``None`` if unknown."""
         return self._native.process_status(process_id)
+
+    def process_info(self, process_id):
+        """Return a managed process snapshot, including optional framework labels."""
+        return self._native.process_info(process_id)
 
     def process_result(self, process_id):
         """Return a completed RunResult snapshot, or ``None`` while active/unknown."""

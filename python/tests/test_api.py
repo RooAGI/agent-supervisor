@@ -259,6 +259,42 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PersistentProcessTests(unittest.IsolatedAsyncioTestCase):
+    async def test_supervisor_can_launch_owned_tui_child(self):
+        supervisor = Supervisor()
+        await supervisor.start_tui(sys.executable, args=("-c", "pass"))
+        await asyncio.sleep(0.05)
+        self.assertEqual(supervisor.active_processes(), 0)
+
+    async def test_background_process_metadata_is_visible_and_validated(self):
+        supervisor = Supervisor()
+        process_id = await supervisor.start_background(
+            py_command("import time; time.sleep(0.05)"),
+            framework="LangGraph",
+            run_label="triage graph",
+        )
+        info = supervisor.process_info(process_id)
+        self.assertEqual(info["framework"], "LangGraph")
+        self.assertEqual(info["run_label"], "triage graph")
+        self.assertEqual(info["process_id"], process_id.token)
+        await supervisor.wait_process(process_id)
+
+        default_id = await supervisor.start_background(py_command("pass"))
+        default_info = supervisor.process_info(default_id)
+        self.assertIsNone(default_info["framework"])
+        self.assertIsNone(default_info["run_label"])
+        await supervisor.wait_process(default_id)
+
+    async def test_metadata_rejects_terminal_controls_and_oversized_values(self):
+        supervisor = Supervisor()
+        with self.assertRaises(ValueError):
+            await supervisor.start_background(
+                py_command("pass"), framework="OpenAI\x1b[2J"
+            )
+        with self.assertRaises(ValueError):
+            await supervisor.start_background(
+                py_command("pass"), run_label="x" * 129
+            )
+
     async def test_process_id_token_round_trips_through_json(self):
         supervisor = Supervisor()
         process_id = await supervisor.start_background(

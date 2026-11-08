@@ -152,6 +152,16 @@ impl AgentRun {
         command: &Command,
         policy: &Policy,
     ) -> Result<SupervisedChild, SandboxError> {
+        self.start_with_metadata(command, policy, crate::ManagedProcessMetadata::default())
+    }
+
+    /// Start a process in this run with descriptive framework and run labels.
+    pub fn start_with_metadata(
+        &self,
+        command: &Command,
+        policy: &Policy,
+        metadata: crate::ManagedProcessMetadata,
+    ) -> Result<SupervisedChild, SandboxError> {
         if self.inner.cancellation.is_cancelled() {
             return Err(cancelled_error());
         }
@@ -159,7 +169,9 @@ impl AgentRun {
             self.cancel_now();
             return Err(timeout_error());
         }
-        self.inner.supervisor.start(command, policy)
+        self.inner
+            .supervisor
+            .start_with_metadata(command, policy, metadata)
     }
 
     pub async fn run_command(

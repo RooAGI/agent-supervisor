@@ -1,9 +1,10 @@
 mod mcp_stdio;
 
 use agent_supervisor::{
-    execute_with_cancellation, spawn_with_supervisor, Enforcement, EnforcementRequirement,
+    execute_with_cancellation, Enforcement, EnforcementRequirement,
     EnvironmentPolicy, EventStream as CoreEventStream, ExecutionRequest, FilesystemAccess,
-    FilesystemGrant, FilesystemPolicy, ManagedProcessResult, ManagedProcessStatus, NetworkMode,
+    FilesystemGrant, FilesystemPolicy, ManagedProcessMetadata, ManagedProcessResult,
+    ManagedProcessStatus, NetworkMode,
     PlatformCapabilities, ProcessEvent, ProcessEventStream, ProcessReceipt, ProcessStopResult,
     ResourceLimits, SandboxError, SandboxPolicy, StreamScope, Supervisor as RustSupervisor,
     SupervisorEvent as CoreSupervisorEvent, SupervisorEventKind,
@@ -704,14 +705,18 @@ impl AgentRunHandle {
         })
     }
 
-    #[pyo3(signature = (command, *, policy=None))]
+    #[pyo3(signature = (command, *, policy=None, framework=None, run_label=None))]
     fn start<'py>(
         &self,
         py: Python<'py>,
         command: PyRef<'py, Command>,
         policy: Option<PyRef<'py, Policy>>,
+        framework: Option<String>,
+        run_label: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let request = request_from(&command.clone(), policy.as_deref());
+        let metadata = ManagedProcessMetadata::new(framework, run_label)
+            .map_err(PyValueError::new_err)?;
         let supervisor = self.supervisor.clone();
         let inner = self.inner.clone();
         future_into_py(py, async move {
@@ -722,7 +727,7 @@ impl AgentRunHandle {
                 cwd: request.working_directory.clone(),
             };
             let child = inner
-                .start(&command, &request.policy)
+                .start_with_metadata(&command, &request.policy, metadata)
                 .map_err(to_py_error)?;
             let events = child.into_event_stream().map_err(to_py_error)?;
             Python::attach(|py| {
@@ -759,6 +764,27 @@ impl SupervisorHandle {
 
     fn active_agent_runs(&self) -> usize {
         self.inner.active_agent_runs()
+    }
+
+    #[pyo3(signature = (executable, *, args=None))]
+    fn start_tui<'py>(
+        &self,
+        py: Python<'py>,
+        executable: PathBuf,
+        args: Option<Vec<String>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let supervisor = self.inner.clone();
+        let args = args
+            .unwrap_or_default()
+            .into_iter()
+            .map(std::ffi::OsString::from)
+            .collect::<Vec<_>>();
+        future_into_py(py, async move {
+            supervisor
+                .start_tui(&executable, &args)
+                .map_err(to_py_error)?;
+            Ok(())
+        })
     }
 
     #[pyo3(signature = (timeout=300.0, shutdown_grace=5.0))]
@@ -811,14 +837,18 @@ impl SupervisorHandle {
         })
     }
 
-    #[pyo3(signature = (command, *, policy=None))]
+    #[pyo3(signature = (command, *, policy=None, framework=None, run_label=None))]
     fn start_background<'py>(
         &self,
         py: Python<'py>,
         command: PyRef<'py, Command>,
         policy: Option<PyRef<'py, Policy>>,
+        framework: Option<String>,
+        run_label: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let request = request_from(&command.clone(), policy.as_deref());
+        let metadata = ManagedProcessMetadata::new(framework, run_label)
+            .map_err(PyValueError::new_err)?;
         let command = agent_supervisor::Command {
             argv: std::iter::once(request.executable.display().to_string())
                 .chain(request.args.clone())
@@ -829,7 +859,7 @@ impl SupervisorHandle {
         let supervisor = self.inner.clone();
         future_into_py(py, async move {
             let id = supervisor
-                .start_background(&command, &policy)
+                .start_background_with_metadata(&command, &policy, metadata)
                 .map_err(to_py_error)?;
             Python::attach(|py| Py::new(py, SupervisorProcessId { inner: id }))
         })
@@ -844,6 +874,24 @@ impl SupervisorHandle {
             }
             .to_owned()
         })
+    }
+
+    fn process_info<'py>(
+        &self,
+        py: Python<'py>,
+        id: PyRef<'_, SupervisorProcessId>,
+    ) -> PyResult<Option<Bound<'py, PyDict>>> {
+        let Some(info) = self.inner.process(id.inner) else {
+            return Ok(None);
+        };
+        let result = PyDict::new(py);
+        result.set_item("process_id", info.supervisor_id.to_string())?;
+        result.set_item("pid", info.process_id)?;
+        result.set_item("alive", info.alive)?;
+        result.set_item("executable", info.executable.map(|path| path.display().to_string()))?;
+        result.set_item("framework", info.framework)?;
+        result.set_item("run_label", info.run_label)?;
+        Ok(Some(result))
     }
 
     fn process_result(
@@ -959,17 +1007,29 @@ impl SupervisorHandle {
         })
     }
 
-    #[pyo3(signature = (command, *, policy=None))]
+    #[pyo3(signature = (command, *, policy=None, framework=None, run_label=None))]
     fn start<'py>(
         &self,
         py: Python<'py>,
         command: PyRef<'py, Command>,
         policy: Option<PyRef<'py, Policy>>,
+        framework: Option<String>,
+        run_label: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let request = request_from(&command.clone(), policy.as_deref());
+        let metadata = ManagedProcessMetadata::new(framework, run_label)
+            .map_err(PyValueError::new_err)?;
         let supervisor = self.inner.clone();
         future_into_py(py, async move {
-            let child = spawn_with_supervisor(&request, &supervisor).map_err(to_py_error)?;
+            let command = agent_supervisor::Command {
+                argv: std::iter::once(request.executable.display().to_string())
+                    .chain(request.args.clone())
+                    .collect(),
+                cwd: request.working_directory.clone(),
+            };
+            let child = supervisor
+                .start_with_metadata(&command, &request.policy, metadata)
+                .map_err(to_py_error)?;
             let events = child.into_event_stream().map_err(to_py_error)?;
             Python::attach(|py| {
                 Py::new(
