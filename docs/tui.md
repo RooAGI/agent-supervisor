@@ -43,7 +43,7 @@ The supervisor owns the TUI child. It stops and reaps that child when the
 supervisor is dropped. The TUI itself is outside the managed-job list, so
 `shutdown_all()` will not stop its own control client.
 
-See the [Rust example](../examples/rust/supervisor-tui/README.md) for an
+See the [Rust example](https://github.com/RooAGI/agent-supervisor/blob/main/examples/rust/supervisor-tui/README.md) for an
 interactive walkthrough with two labeled jobs.
 
 ## Start it from Python
@@ -54,7 +54,7 @@ Install the Python package, build the TUI binary, and set
 owns the separate TUI child; standard input and output remain dedicated to the
 private protocol.
 
-See the [Python example](../examples/python/supervisor_tui.py) for an async
+See the [Python example](https://github.com/RooAGI/agent-supervisor/blob/main/examples/python/supervisor_tui.py) for an async
 walkthrough that starts OpenAI- and LangGraph-labelled jobs, launches the
 dashboard, and confirms that stopping one leaves the other running.
 

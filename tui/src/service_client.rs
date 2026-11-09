@@ -1,5 +1,6 @@
 use agent_supervisor::tui::{
-    read_frame, write_frame, TuiProcess, TuiRequest, TuiResponse, TuiStopOutcome, PROTOCOL_VERSION,
+    read_frame, write_frame, TuiActivity, TuiAttempt, TuiProcess, TuiRequest, TuiResponse, TuiRun,
+    TuiStopOutcome, PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -200,21 +201,27 @@ async fn proxy(
                     match action {
                         Pending::Snapshot { tui_id, subscribe } => {
                             let processes = parse_processes(&message);
+                            let runs = parse_runs(&message);
+                            let activities = parse_activities(&message);
+                            let attempts = parse_attempts(&message);
+                            let flow_runs = parse_flow_runs(&message);
                             known_processes = processes
                                 .iter()
                                 .cloned()
                                 .map(|process| (process.process_id.clone(), process))
                                 .collect();
                             let response = if subscribe {
-                                TuiResponse::Snapshot { version: PROTOCOL_VERSION, request_id: tui_id, processes: processes.clone() }
+                                TuiResponse::Snapshot { version: PROTOCOL_VERSION, request_id: tui_id, processes: processes.clone(), runs, activities, attempts, flow_runs }
                             } else {
-                                TuiResponse::Processes { version: PROTOCOL_VERSION, request_id: tui_id, processes: processes.clone() }
+                                TuiResponse::Processes { version: PROTOCOL_VERSION, request_id: tui_id, processes: processes.clone(), runs, activities, attempts, flow_runs }
                             };
                             write_frame(&mut ui_write, &response).await?;
-                            for process in processes.into_iter().filter(|p| p.alive) {
-                                if attached.insert(process.process_id.clone()) {
-                                    let attach_id = service_id(&mut next_service_id)?;
-                                    write_json(&mut socket_write, &json!({"type":"attach","requestId":attach_id,"processId":process.process_id})).await?;
+                            if role == "tui" {
+                                for process in processes.into_iter().filter(|p| p.alive) {
+                                    if attached.insert(process.process_id.clone()) {
+                                        let attach_id = service_id(&mut next_service_id)?;
+                                        write_json(&mut socket_write, &json!({"type":"attach","requestId":attach_id,"processId":process.process_id})).await?;
+                                    }
                                 }
                             }
                         }
@@ -373,6 +380,36 @@ fn parse_processes(value: &Value) -> Vec<TuiProcess> {
         .collect()
 }
 
+fn records(value: &Value, key: &str) -> Value {
+    Value::Array(
+        value
+            .get(key)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+    )
+}
+
+fn parse_runs(value: &Value) -> Vec<TuiRun> {
+    serde_json::from_value(records(value, "runs")).unwrap_or_default()
+}
+
+fn parse_activities(value: &Value) -> Vec<TuiActivity> {
+    serde_json::from_value(records(value, "activities")).unwrap_or_default()
+}
+
+fn parse_attempts(value: &Value) -> Vec<TuiAttempt> {
+    serde_json::from_value(records(value, "attempts")).unwrap_or_default()
+}
+
+fn parse_flow_runs(value: &Value) -> Vec<Value> {
+    value
+        .get("flowRuns")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
 fn service_id(next: &mut u64) -> io::Result<String> {
     let id = *next;
     *next = next
@@ -416,11 +453,16 @@ fn invalid_data(error: impl std::fmt::Display) -> io::Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_processes, proxy, read_json_line, read_scoped_token, write_json};
-    use agent_supervisor::tui::{
-        read_frame, write_frame, TuiRequest, TuiResponse, PROTOCOL_VERSION,
+    use super::{
+        connect, parse_activities, parse_attempts, parse_flow_runs, parse_processes, parse_runs,
+        proxy, read_json_line, read_scoped_token, write_json,
     };
-    use serde_json::json;
+    use agent_supervisor::tui::{
+        read_frame, write_frame, TuiActivity, TuiAttempt, TuiProcess, TuiRequest, TuiResponse,
+        TuiRun, PROTOCOL_VERSION,
+    };
+    use serde_json::{json, Value};
+    use std::path::Path;
     use tokio::io::BufReader;
     use tokio::net::{UnixListener, UnixStream};
     use tokio::time::{timeout, Duration};
@@ -451,6 +493,58 @@ mod tests {
         assert_eq!(processes[0].post_id.as_deref(), Some("post-d"));
         assert_eq!(processes[0].worker_id.as_deref(), Some("worker-e"));
         assert_eq!(processes[0].runtime_run_id.as_deref(), Some("runtime-f"));
+    }
+
+    #[test]
+    fn service_snapshot_preserves_run_activity_attempt_and_waiting_context() {
+        let value = json!({
+            "runs": [{
+                "runId": "run-1", "managerId": "manager-1", "status": "running",
+                "context": {"framework": "langgraph", "projectId": "project-a", "flowRunId": "flow-b"},
+                "revision": 3, "updatedAtMs": 1000
+            }],
+            "activities": [{
+                "activityId": "activity-1", "runId": "run-1", "kind": "node",
+                "status": "waitingForInput", "health": "healthy", "lastContactAtMs": 900,
+                "waitingReason": "approval", "revision": 2, "updatedAtMs": 1000
+            }],
+            "attempts": [{
+                "attemptId": "attempt-1", "activityId": "activity-1", "runId": "run-1",
+                "generation": 2, "status": "running", "cancellation": "none",
+                "processIds": [], "reports": [], "revision": 4, "updatedAtMs": 1000
+            }]
+        });
+        let runs = parse_runs(&value);
+        let activities = parse_activities(&value);
+        let attempts = parse_attempts(&value);
+        assert_eq!(runs[0].run_id, "run-1");
+        assert_eq!(runs[0].context["flowRunId"], "flow-b");
+        assert_eq!(activities[0].waiting_reason.as_deref(), Some("approval"));
+        assert_eq!(attempts[0].generation, 2);
+        assert!(attempts[0].process_ids.is_empty());
+    }
+
+    #[test]
+    fn service_snapshot_preserves_canonical_flowrun_projection() {
+        let flows = parse_flow_runs(&json!({
+            "flowRuns": [{
+                "flowId": "flow-1",
+                "boardId": "board-1",
+                "flowRevision": 8,
+                "coordinatorFence": 3,
+                "pendingSync": true,
+                "syncError": "temporary failure",
+                "tasks": {"task-1": {"title": "Implement", "state": "running", "waitingReason": null}}
+            }]
+        }));
+        assert_eq!(flows.len(), 1);
+        assert_eq!(flows[0]["flowId"], "flow-1");
+        assert_eq!(flows[0]["boardId"], "board-1");
+        assert_eq!(flows[0]["flowRevision"], 8);
+        assert_eq!(flows[0]["coordinatorFence"], 3);
+        assert_eq!(flows[0]["pendingSync"], true);
+        assert_eq!(flows[0]["syncError"], "temporary failure");
+        assert_eq!(flows[0]["tasks"]["task-1"]["state"], "running");
     }
 
     #[test]
@@ -497,7 +591,7 @@ mod tests {
         let proxy_task = tokio::spawn(proxy(
             ui,
             socket_path.clone(),
-            "view".into(),
+            "tui".into(),
             "test-token-with-more-than-thirty-two-characters".into(),
             BufReader::new(service_reader),
             service_writer,
@@ -548,17 +642,20 @@ mod tests {
                     "projectId":"p",
                     "flowRunId":"f",
                     "taskId":"t"
-                }]
+                }],
+                "runs":[{"runId":"run-1","managerId":"manager-1","status":"running","context":{"projectId":"p","flowRunId":"f","framework":"codex"},"revision":1,"updatedAtMs":1000}],
+                "activities":[{"activityId":"activity-1","runId":"run-1","kind":"chat","status":"running","health":"healthy","lastContactAtMs":1000,"waitingReason":null,"revision":1,"updatedAtMs":1000}],
+                "attempts":[{"attemptId":"attempt-1","activityId":"activity-1","runId":"run-1","generation":1,"status":"running","cancellation":"none","processIds":["v1:manager:9"],"reports":[],"revision":1,"updatedAtMs":1000}]
             }),
         )
         .await
         .unwrap();
         let snapshot: TuiResponse =
             serde_json::from_slice(&read_frame(&mut ui_reader).await.unwrap()).unwrap();
-        assert!(matches!(
-            snapshot,
-            TuiResponse::Snapshot { request_id: 7, .. }
-        ));
+        assert!(
+            matches!(snapshot, TuiResponse::Snapshot { request_id: 7, runs, activities, attempts, .. }
+            if runs.len() == 1 && activities[0].status == "running" && attempts[0].process_ids.len() == 1)
+        );
 
         let attach = read_json_line(&mut BufReader::new(&mut service_reader))
             .await
@@ -631,14 +728,14 @@ mod tests {
         let (reconnected_reader, mut reconnected_writer) = reconnected.into_split();
         let mut reconnected_reader = BufReader::new(reconnected_reader);
         let auth = read_json_line(&mut reconnected_reader).await.unwrap();
-        assert_eq!(auth["role"], "view");
+        assert_eq!(auth["role"], "tui");
         assert_eq!(
             auth["token"],
             "test-token-with-more-than-thirty-two-characters"
         );
         write_json(
             &mut reconnected_writer,
-            &json!({"type":"ready","version":1,"role":"view"}),
+            &json!({"type":"ready","version":1,"role":"tui"}),
         )
         .await
         .unwrap();
@@ -675,5 +772,466 @@ mod tests {
         drop(reconnected_writer);
         drop(listener);
         std::fs::remove_file(socket_path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn live_service_flowrun_snapshot_reconnects_without_duplicate_worker_launch() {
+        use agent_supervisor::service::SupervisorService;
+        use agent_supervisor::service_client::{
+            ActivityStatus, ServiceFlowRunProjection, ServiceFlowTaskProjection, ServiceRole,
+            SupervisorServiceClient,
+        };
+        use agent_supervisor::Supervisor;
+        use std::collections::BTreeMap;
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::Arc;
+
+        let temp_dir = TestDirectory::new();
+        let socket_path = std::path::PathBuf::from(format!(
+            "/tmp/astui-live-{}-{}.sock",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let ready_path = temp_dir.path.join("service.ready");
+        let token_path = temp_dir.path.join("tui.token");
+        let tui_token = "tui-live-flowrun-token-for-integration-tests";
+        let control_token = "control-live-flowrun-token-for-integration-tests";
+        std::fs::write(&token_path, format!("{tui_token}\n")).unwrap();
+        std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let python = find_program("python3").expect("python3 is needed for the worker fixture");
+        let worker = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/python/supervisor_jsonl_worker.py")
+            .canonicalize()
+            .unwrap();
+        let service = SupervisorService::new(
+            Arc::new(Supervisor::new()),
+            "view-live-flowrun-token-for-integration-tests",
+            control_token,
+            tui_token,
+        )
+        .unwrap()
+        .with_state_dir(temp_dir.path.join("state"))
+        .with_workflow_worker(
+            python,
+            vec!["-u".into(), worker.to_string_lossy().into_owned()],
+            None,
+            BTreeMap::new(),
+        );
+        let service_socket = socket_path.clone();
+        let service_ready = ready_path.clone();
+        let server = tokio::spawn(async move {
+            service
+                .serve_unix_with_ready(service_socket, Some(&service_ready))
+                .await
+        });
+        let ready_result = tokio::time::timeout(Duration::from_secs(5), async {
+            while !ready_path.exists() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        if ready_result.is_err() {
+            if server.is_finished() {
+                panic!(
+                    "Supervisor service exited before readiness: {:?}",
+                    server.await
+                );
+            }
+            panic!("Supervisor service did not publish readiness before timeout");
+        }
+
+        let control =
+            SupervisorServiceClient::connect(&socket_path, control_token, ServiceRole::Control)
+                .await
+                .unwrap();
+        let (mut tui_stream, tui_bridge) = connect(&socket_path, &token_path, "tui").await.unwrap();
+        let initial = tui_subscribe(&mut tui_stream, 1).await;
+        assert!(initial.runs.is_empty());
+        assert!(initial.processes.is_empty());
+
+        let projection = ServiceFlowRunProjection {
+            flow_id: "flow-tui-live".into(),
+            board_id: "board-tui-live".into(),
+            flow_revision: 0,
+            current_stage: None,
+            stage_transitions: BTreeMap::new(),
+            max_attempts: 3,
+            tasks: vec![ServiceFlowTaskProjection {
+                task_id: "task-live".into(),
+                post_id: "post-live".into(),
+                title: "Live TUI worker".into(),
+                stage_id: None,
+                dependencies: Vec::new(),
+                assignee: None,
+                state: "ready".into(),
+                waiting_reason: None,
+                attempt_id: None,
+                generation: None,
+                last_source_cursor: 0,
+            }],
+        };
+        let registration = control
+            .register_flow_run(
+                projection,
+                "tui-integration-coordinator",
+                Some(json!({
+                    "task-live": {
+                        "projectId":"project-live",
+                        "runtimeOptions":{"checkpointEndpoint":"http://127.0.0.1/checkpoints"},
+                        "graph":{"id":"fixture-graph"},
+                        "input":{"messages":[],"context":{}},
+                        "durationMs":30000,
+                        "cancelDelayMs":500
+                    }
+                })),
+            )
+            .await
+            .unwrap();
+        let claimed = control
+            .claim_flow_run(&registration.flow_id, "tui-integration-coordinator", 0)
+            .await
+            .unwrap();
+
+        let mut request_id = 2_u64;
+        let running = tui_wait_snapshot(&mut tui_stream, &mut request_id, |snapshot| {
+            snapshot.flow_runs.first().is_some_and(|flow| {
+                flow["tasks"]["task-live"]["state"] == "running"
+                    && flow["tasks"]["task-live"]["processId"].is_string()
+                    && flow["tasks"]["task-live"]["lastOutcome"]["evidence"]["message"]
+                        == "framework-neutral worker started"
+            }) && snapshot.attempts.iter().any(|attempt| {
+                attempt.reports.iter().any(|report| {
+                    report["detail"]["evidence"]["message"] == "framework-neutral worker started"
+                })
+            })
+        })
+        .await;
+        assert_eq!(running.runs.len(), 1);
+        assert_eq!(running.processes.len(), 1);
+        assert_eq!(running.attempts.len(), 1);
+        let run = &running.runs[0];
+        assert_eq!(run.context["flowRunId"], "flow-tui-live");
+        let activity = &running.activities[0];
+        assert_eq!(activity.run_id, run.run_id);
+        let attempt = &running.attempts[0];
+        assert_eq!(attempt.run_id, run.run_id);
+        assert_eq!(attempt.activity_id, activity.activity_id);
+        assert_eq!(attempt.generation, 1);
+        let task = &running.flow_runs[0]["tasks"]["task-live"];
+        assert_eq!(task["attemptId"], attempt.attempt_id);
+        assert_eq!(task["generation"], attempt.generation);
+        assert_eq!(task["postId"], "post-live");
+        let process_id = task["processId"].as_str().unwrap();
+        assert!(attempt.process_ids.iter().any(|id| id == process_id));
+        let process = running
+            .processes
+            .iter()
+            .find(|process| process.process_id == process_id)
+            .expect("FlowRun attempt process should appear in the TUI snapshot");
+        assert!(process.alive);
+        assert_eq!(process.framework.as_deref(), Some("rooagiRuntime"));
+        assert_eq!(process.project_id.as_deref(), Some("project-live"));
+        assert_eq!(process.flow_run_id.as_deref(), Some("flow-tui-live"));
+        assert_eq!(process.task_id.as_deref(), Some("task-live"));
+        assert_eq!(process.post_id.as_deref(), Some("post-live"));
+        assert_eq!(
+            process.runtime_run_id,
+            task["runtimeRunId"].as_str().map(str::to_owned)
+        );
+        assert!(attempt.reports.iter().any(|report| {
+            report["detail"]["evidence"]["message"] == "framework-neutral worker started"
+        }));
+        assert_eq!(task["lastOutcome"]["status"], "running");
+        assert_eq!(
+            task["lastOutcome"]["evidence"]["message"],
+            "framework-neutral worker started"
+        );
+
+        // Closing and reopening the read-only TUI client attaches to the same
+        // service-owned process. Its protocol has no work-launch operation.
+        drop(tui_stream);
+        tui_bridge.abort();
+        let (mut reconnected, reconnect_bridge) =
+            connect(&socket_path, &token_path, "tui").await.unwrap();
+        let reattached = tui_subscribe(&mut reconnected, 50).await;
+        assert_eq!(reattached.runs.len(), 1);
+        assert_eq!(reattached.attempts.len(), 1);
+        assert_eq!(reattached.processes.len(), 1);
+        assert_eq!(reattached.processes[0].process_id, process_id);
+        let durable_snapshot = control.snapshot().await.unwrap();
+        assert_eq!(durable_snapshot.counts.runs, 1);
+        assert_eq!(durable_snapshot.counts.attempts, 1);
+        assert_eq!(durable_snapshot.counts.processes, 1);
+        assert_eq!(
+            durable_snapshot.flow_runs[0].tasks["task-live"].attempts_started,
+            1
+        );
+        assert_eq!(
+            durable_snapshot.flow_runs[0].tasks["task-live"]
+                .process_id
+                .as_deref(),
+            Some(process_id)
+        );
+
+        let activity_id = reattached.activities[0].activity_id.clone();
+        control
+            .set_waiting(
+                &activity_id,
+                Some("fixture awaiting approval"),
+                ActivityStatus::WaitingForApproval,
+            )
+            .await
+            .unwrap();
+        let waiting = tui_wait_snapshot(&mut reconnected, &mut request_id, |snapshot| {
+            snapshot.activities.iter().any(|activity| {
+                activity.activity_id == activity_id
+                    && activity.waiting_reason.as_deref() == Some("fixture awaiting approval")
+            })
+        })
+        .await;
+        assert_eq!(waiting.activities[0].status, "waitingForApproval");
+        assert_eq!(waiting.activities[0].health, "healthy");
+        assert!(waiting.activities[0].last_contact_at_ms.is_some());
+
+        control
+            .cancel_flow_task(
+                "flow-tui-live",
+                "task-live",
+                &attempt.attempt_id,
+                attempt.generation,
+                claimed.coordinator_fence,
+            )
+            .await
+            .unwrap();
+        let cancel_requested = tui_wait_snapshot(&mut reconnected, &mut request_id, |snapshot| {
+            snapshot.flow_runs[0]["tasks"]["task-live"]["cancelRequested"] == true
+        })
+        .await;
+        assert_eq!(
+            cancel_requested.flow_runs[0]["tasks"]["task-live"]["state"],
+            "running"
+        );
+        assert_eq!(cancel_requested.attempts[0].cancellation, "requested");
+        assert_eq!(
+            cancel_requested.flow_runs[0]["tasks"]["task-live"]["waitingReason"],
+            "worker cancellation requested"
+        );
+
+        let cancelled = tui_wait_snapshot(&mut reconnected, &mut request_id, |snapshot| {
+            snapshot.flow_runs[0]["tasks"]["task-live"]["state"] == "cancelled"
+        })
+        .await;
+        let cancelled_task = &cancelled.flow_runs[0]["tasks"]["task-live"];
+        assert_eq!(cancelled_task["cancelRequested"], false);
+        assert_eq!(cancelled_task["lastOutcome"]["status"], "cancelled");
+        assert_eq!(
+            cancelled_task["lastOutcome"]["evidence"]["summary"],
+            "cooperative cancellation acknowledged"
+        );
+        assert_eq!(cancelled.attempts[0].cancellation, "completed");
+        assert_eq!(cancelled.runs.len(), 1);
+
+        drop(reconnected);
+        reconnect_bridge.abort();
+        shutdown_test_service(&socket_path, control_token).await;
+        server.await.unwrap().unwrap();
+    }
+
+    #[derive(Default)]
+    struct TuiSnapshot {
+        processes: Vec<TuiProcess>,
+        runs: Vec<TuiRun>,
+        activities: Vec<TuiActivity>,
+        attempts: Vec<TuiAttempt>,
+        flow_runs: Vec<Value>,
+    }
+
+    impl TuiSnapshot {
+        fn from_response(response: TuiResponse) -> Option<Self> {
+            match response {
+                TuiResponse::Snapshot {
+                    processes,
+                    runs,
+                    activities,
+                    attempts,
+                    flow_runs,
+                    ..
+                }
+                | TuiResponse::Processes {
+                    processes,
+                    runs,
+                    activities,
+                    attempts,
+                    flow_runs,
+                    ..
+                } => Some(Self {
+                    processes,
+                    runs,
+                    activities,
+                    attempts,
+                    flow_runs,
+                }),
+                _ => None,
+            }
+        }
+    }
+
+    async fn tui_subscribe(stream: &mut tokio::io::DuplexStream, request_id: u64) -> TuiSnapshot {
+        let (mut reader, mut writer) = tokio::io::split(stream);
+        write_frame(
+            &mut writer,
+            &TuiRequest::Hello {
+                version: PROTOCOL_VERSION,
+                min_version: PROTOCOL_VERSION,
+                max_version: PROTOCOL_VERSION,
+            },
+        )
+        .await
+        .unwrap();
+        let hello = read_tui_response(&mut reader).await;
+        assert!(matches!(hello, TuiResponse::Hello { .. }));
+        write_frame(
+            &mut writer,
+            &TuiRequest::Subscribe {
+                version: PROTOCOL_VERSION,
+                request_id,
+            },
+        )
+        .await
+        .unwrap();
+        loop {
+            let response = read_tui_response(&mut reader).await;
+            match response {
+                response @ TuiResponse::Snapshot {
+                    request_id: found, ..
+                } if found == request_id => return TuiSnapshot::from_response(response).unwrap(),
+                TuiResponse::Error { code, message, .. } => {
+                    panic!("TUI subscribe failed: {code}: {message}")
+                }
+                _ => {}
+            }
+        }
+    }
+
+    async fn tui_wait_snapshot(
+        stream: &mut tokio::io::DuplexStream,
+        next_request_id: &mut u64,
+        mut predicate: impl FnMut(&TuiSnapshot) -> bool,
+    ) -> TuiSnapshot {
+        tokio::time::timeout(Duration::from_secs(8), async {
+            loop {
+                let request_id = *next_request_id;
+                *next_request_id += 1;
+                let snapshot = tui_list_snapshot(stream, request_id).await;
+                if predicate(&snapshot) {
+                    return snapshot;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("TUI snapshot did not reach the expected live state")
+    }
+
+    async fn tui_list_snapshot(
+        stream: &mut tokio::io::DuplexStream,
+        request_id: u64,
+    ) -> TuiSnapshot {
+        let (mut reader, mut writer) = tokio::io::split(stream);
+        write_frame(
+            &mut writer,
+            &TuiRequest::ListProcesses {
+                version: PROTOCOL_VERSION,
+                request_id,
+            },
+        )
+        .await
+        .unwrap();
+        loop {
+            let response = read_tui_response(&mut reader).await;
+            match response {
+                response @ TuiResponse::Processes {
+                    request_id: found, ..
+                } if found == request_id => return TuiSnapshot::from_response(response).unwrap(),
+                TuiResponse::Error {
+                    code,
+                    message,
+                    request_id: None,
+                    ..
+                } if code == "not_found" && message == "unknown process" => {}
+                TuiResponse::Error { code, message, .. } => {
+                    panic!("TUI snapshot failed: {code}: {message}")
+                }
+                _ => {}
+            }
+        }
+    }
+
+    async fn read_tui_response(reader: &mut (impl tokio::io::AsyncRead + Unpin)) -> TuiResponse {
+        let frame = tokio::time::timeout(Duration::from_secs(5), read_frame(reader))
+            .await
+            .expect("timed out waiting for TUI response")
+            .unwrap();
+        serde_json::from_slice(&frame).unwrap()
+    }
+
+    fn find_program(name: &str) -> Option<std::path::PathBuf> {
+        std::env::split_paths(&std::env::var_os("PATH")?)
+            .map(|directory| directory.join(name))
+            .find(|path| path.is_file())
+            .and_then(|path| path.canonicalize().ok())
+    }
+
+    async fn shutdown_test_service(socket: &Path, control_token: &str) {
+        let stream = UnixStream::connect(socket).await.unwrap();
+        let (reader, mut writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+        write_json(
+            &mut writer,
+            &json!({"type":"auth","role":"control","token":control_token}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(read_json_line(&mut reader).await.unwrap()["type"], "ready");
+        write_json(
+            &mut writer,
+            &json!({"type":"shutdown","requestId":"tui-integration-shutdown","graceMs":0}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            read_json_line(&mut reader).await.unwrap()["type"],
+            "shutdownComplete"
+        );
+    }
+
+    struct TestDirectory {
+        path: std::path::PathBuf,
+    }
+
+    impl TestDirectory {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "agent-supervisor-tui-live-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self { path }
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
     }
 }

@@ -26,6 +26,9 @@ system-specific shell or interpreter.
 
 - [`supervisor_background_jobs.py`](python/supervisor_background_jobs.py):
   manager-owned background jobs.
+- [`supervisor_jsonl_worker.py`](python/supervisor_jsonl_worker.py):
+  framework-neutral FlowRun worker protocol fixture. It uses only Python's
+  standard library and can be smoke-tested without a Desktop package or SDK.
 - [`supervisor_tui.py`](python/supervisor_tui.py): launch the separate TUI
   with framework-labelled jobs and stop one from the dashboard.
 - [`official_mcp_server.py`](python/official_mcp_server.py): official MCP SDK.
@@ -38,6 +41,44 @@ from the repository root:
 ```bash
 python -m pip install -e ./python
 python examples/python/supervisor_background_jobs.py
+```
+
+### Framework-neutral FlowRun worker fixture
+
+The service-owned workflow worker setting selects the executable and fixed
+arguments used for each task attempt. For example, from the repository root:
+
+```bash
+cargo build --bin agent-supervisor-service
+"$PWD/target/debug/agent-supervisor-service" \
+  --socket /tmp/agent-supervisor.sock \
+  --view-token-file /path/to/view.token \
+  --control-token-file /path/to/control.token \
+  --tui-token-file /path/to/tui.token \
+  --state-dir /path/to/supervisor-state \
+  --workflow-worker-command "$(command -v python3)" \
+  --workflow-worker-arg -u \
+  --workflow-worker-arg "$PWD/examples/python/supervisor_jsonl_worker.py"
+```
+
+The configured service worker receives one JSONL start envelope on stdin for
+each reserved attempt. It writes correlated JSONL events to stdout with the
+same `attemptId`, `generation`, and increasing `sourceCursor`; stdout is the
+protocol stream, while diagnostics belong on stderr. The fixture emits
+`running`, then either `succeeded` after its requested `durationMs` (default
+one second) or `cancelled` after a cooperative `{"type":"cancel"}` command.
+Each terminal event includes a small `output` evidence object. The current
+service dispatcher sends a plain `cancel` command; the fixture also checks
+attempt identity if a host includes it.
+
+The fixture demonstrates the worker boundary and cancellation contract. It
+does not run an agent framework or make model calls. The current service
+worker adapter also validates the invocation object before launch; for the
+Roo Runtime path that object includes `runtimeOptions`, `graph`, and `input`.
+The example ignores those framework fields. Check its protocol locally with:
+
+```bash
+python3 -m unittest discover -s examples/python -p 'test_supervisor_jsonl_worker.py'
 ```
 
 For the Python TUI example, also build the standalone Rust executable and set

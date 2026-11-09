@@ -7,11 +7,14 @@
 use std::path::PathBuf;
 
 mod agent_run;
+pub(crate) mod coordinator;
+pub(crate) mod coordinator_store;
 mod environment;
 mod error;
 mod event_log;
 mod events;
 mod filesystem;
+pub(crate) mod flowboard_mcp;
 mod group;
 pub mod mcp;
 mod network;
@@ -23,12 +26,17 @@ mod pty;
 mod runner;
 #[cfg(unix)]
 pub mod service;
+#[cfg(unix)]
+pub mod service_client;
 mod supervisor;
 pub mod tui;
 #[cfg(feature = "wasm")]
 mod wasm;
 #[cfg(windows)]
 mod windows_filesystem;
+pub(crate) mod workflow;
+#[cfg(unix)]
+pub(crate) mod workflow_dispatcher;
 
 pub use agent_run::{AgentRun, AgentRunPolicy};
 pub use environment::{apply_environment_policy, validate_environment_policy, EnvironmentPolicy};

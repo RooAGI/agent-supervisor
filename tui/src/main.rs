@@ -53,7 +53,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Err("service-client mode currently requires Unix sockets".into());
     }
     if !args.is_empty() {
-        return Err("usage: agent-supervisor-tui [--service-socket PATH --token-file PATH [--role view|control]]".into());
+        return Err("usage: agent-supervisor-tui [--service-socket PATH --token-file PATH [--role view|tui]]".into());
     }
     run_with_protocol(stdin(), stdout(), true).await
 }
@@ -150,6 +150,10 @@ where
     )
     .await?;
     let mut processes = Vec::new();
+    let mut runs;
+    let mut activities;
+    let mut attempts;
+    let mut flow_runs: Vec<serde_json::Value>;
     let mut pending = Some((first_id, PendingAction::Subscribe));
     let mut resync_after_pending = false;
     loop {
@@ -163,9 +167,17 @@ where
             TuiResponse::Snapshot {
                 request_id,
                 processes: snapshot,
+                runs: snapshot_runs,
+                activities: snapshot_activities,
+                attempts: snapshot_attempts,
+                flow_runs: snapshot_flow_runs,
                 ..
             } if pending == Some((request_id, PendingAction::Subscribe)) => {
                 processes = snapshot;
+                runs = snapshot_runs;
+                activities = snapshot_activities;
+                attempts = snapshot_attempts;
+                flow_runs = snapshot_flow_runs;
                 pending = None;
                 break;
             }
@@ -184,12 +196,17 @@ where
     let mut detail = false;
     let mut confirmation = None;
     let mut notice = String::from("Connected. Process list refreshes every second.");
+    let mut service_stale = false;
     let mut refresh = interval(REFRESH_PERIOD);
     refresh.tick().await;
 
     loop {
         draw(
             &mut terminal_out,
+            &runs,
+            &activities,
+            &attempts,
+            &flow_runs,
             &processes,
             selected,
             detail,
@@ -216,32 +233,45 @@ where
                         resync_after_pending = true;
                         notice = "Supervisor event stream requested a process-list resync.".into();
                     }
-                    TuiResponse::Snapshot { request_id, processes: snapshot, .. }
-                    | TuiResponse::Processes { request_id, processes: snapshot, .. } => {
+                    TuiResponse::Snapshot { request_id, processes: snapshot, runs: snapshot_runs, activities: snapshot_activities, attempts: snapshot_attempts, flow_runs: snapshot_flow_runs, .. }
+                    | TuiResponse::Processes { request_id, processes: snapshot, runs: snapshot_runs, activities: snapshot_activities, attempts: snapshot_attempts, flow_runs: snapshot_flow_runs, .. } => {
                         if let Some((expected, action)) = pending {
                             if request_id == expected && matches!(action, PendingAction::Subscribe | PendingAction::List) {
                                 processes = snapshot;
+                                runs = snapshot_runs;
+                                activities = snapshot_activities;
+                                attempts = snapshot_attempts;
+                                flow_runs = snapshot_flow_runs;
                                 pending = None;
                                 resync_after_pending = false;
+                                if service_stale {
+                                    service_stale = false;
+                                    notice = "Supervisor reconnected; current state refreshed.".into();
+                                }
                             }
                         }
                     }
                     TuiResponse::StopResult { request_id, outcome, .. } => {
                         if pending.is_some_and(|(expected, action)| expected == request_id && matches!(action, PendingAction::Stop)) {
                             pending = None;
-                            notice = format!("Stop requested: {outcome}.");
+                            notice = format!("Stop request issued: {outcome}; waiting for worker exit evidence.");
                         }
                     }
                     TuiResponse::ShutdownResult { request_id, outcomes, .. } => {
                         if pending.is_some_and(|(expected, action)| expected == request_id && matches!(action, PendingAction::StopAll)) {
                             pending = None;
-                            notice = format!("Stop requested for {} process(es).", outcomes.len());
+                            notice = format!("Stop requested for {} process(es); waiting for exit evidence.", outcomes.len());
                         }
                     }
                     TuiResponse::Error { request_id, code, message, .. } => {
                         if request_id.is_none() || pending.is_some_and(|(expected, _)| Some(expected) == request_id) {
                             pending = None;
-                            notice = format!("{code}: {message}");
+                            if code == "disconnected" {
+                                service_stale = true;
+                                notice = format!("Supervisor connection stale/disconnected: {message}");
+                            } else {
+                                notice = format!("{code}: {message}");
+                            }
                         }
                     }
                     TuiResponse::Hello { .. } | TuiResponse::UnsupportedVersion { .. } => {
@@ -415,6 +445,10 @@ fn take_request_id(next_id: &mut u64) -> Result<u64, Box<dyn std::error::Error>>
 
 fn draw(
     output: &mut impl Write,
+    runs: &[agent_supervisor::tui::TuiRun],
+    activities: &[agent_supervisor::tui::TuiActivity],
+    attempts: &[agent_supervisor::tui::TuiAttempt],
+    flow_runs: &[serde_json::Value],
     processes: &[TuiProcess],
     selected: usize,
     detail: bool,
@@ -426,7 +460,8 @@ fn draw(
     writeln!(output, "Agent Supervisor · managed processes")?;
     writeln!(
         output,
-        "{} process(es) · refreshing every second",
+        "{} Supervisor run(s) · {} active process(es) · refreshing every second",
+        runs.len(),
         processes.iter().filter(|p| p.alive).count()
     )?;
     writeln!(output, "")?;
@@ -466,6 +501,256 @@ fn draw(
                 framework,
                 sanitize(command, 56)
             )?;
+        }
+    }
+    writeln!(output, "\nCoordinated work")?;
+    if runs.is_empty() {
+        writeln!(output, "     (no runs are currently registered)")?;
+    } else {
+        for run in runs {
+            let context_framework = run
+                .context
+                .get("framework")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+            let linked_framework = activities
+                .iter()
+                .filter(|activity| activity.run_id == run.run_id)
+                .flat_map(|activity| {
+                    attempts
+                        .iter()
+                        .filter(move |attempt| attempt.activity_id == activity.activity_id)
+                })
+                .flat_map(|attempt| attempt.process_ids.iter())
+                .find_map(|process_id| {
+                    processes
+                        .iter()
+                        .find(|process| &process.process_id == process_id)
+                })
+                .and_then(|process| process.framework.clone());
+            let framework = context_framework
+                .or(linked_framework)
+                .unwrap_or_else(|| "unknown".to_owned());
+            let project = run
+                .context
+                .get("projectId")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("-");
+            let task = run
+                .context
+                .get("taskId")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("-");
+            let flow = run
+                .context
+                .get("flowRunId")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("-");
+            writeln!(
+                output,
+                "  {} · {} · project {} · FlowRun {} · task {}",
+                sanitize(&framework, 48),
+                sanitize(&run.status, 32),
+                sanitize(project, 64),
+                sanitize(flow, 80),
+                sanitize(task, 80)
+            )?;
+            writeln!(output, "    run {}", sanitize(&run.run_id, 96))?;
+            for activity in activities
+                .iter()
+                .filter(|activity| activity.run_id == run.run_id)
+            {
+                let waiting = activity.waiting_reason.as_deref().unwrap_or("-");
+                writeln!(
+                    output,
+                    "    {} · {} · health {} · waiting {} · last contact {}",
+                    sanitize(&activity.kind, 48),
+                    sanitize(&activity.status, 32),
+                    sanitize(&activity.health, 24),
+                    sanitize(waiting, 80),
+                    activity
+                        .last_contact_at_ms
+                        .map(|at| at.to_string())
+                        .unwrap_or_else(|| "unknown".into())
+                )?;
+                for attempt in attempts
+                    .iter()
+                    .filter(|attempt| attempt.activity_id == activity.activity_id)
+                {
+                    let report_detail = attempt
+                        .reports
+                        .last()
+                        .and_then(|report| report.get("detail"));
+                    let evidence = report_detail
+                        .and_then(|detail| detail.get("evidence"))
+                        .or_else(|| report_detail.and_then(|detail| detail.get("reasonCode")))
+                        .map(|value| display_value(value, 96))
+                        .unwrap_or_else(|| "-".into());
+                    let cancel = report_detail
+                        .and_then(|detail| detail.get("cancelRequested"))
+                        .and_then(serde_json::Value::as_bool)
+                        .map(|requested| {
+                            if requested {
+                                "requested; awaiting outcome"
+                            } else {
+                                "none"
+                            }
+                        })
+                        .unwrap_or(&attempt.cancellation);
+                    writeln!(
+                        output,
+                        "      attempt {} · {} · cancel {} · processes {} · evidence {}",
+                        attempt.generation,
+                        sanitize(&attempt.status, 32),
+                        sanitize(cancel, 32),
+                        attempt.process_ids.len(),
+                        sanitize(&evidence, 96)
+                    )?;
+                    for process_id in &attempt.process_ids {
+                        let process = processes
+                            .iter()
+                            .find(|process| &process.process_id == process_id);
+                        let framework = process
+                            .and_then(|process| process.framework.as_deref())
+                            .unwrap_or("process details unavailable");
+                        writeln!(
+                            output,
+                            "        process {} · {}",
+                            sanitize(process_id, 96),
+                            sanitize(framework, 40)
+                        )?;
+                    }
+                }
+            }
+        }
+    }
+    writeln!(output, "\nSupervisor FlowRuns")?;
+    if flow_runs.is_empty() {
+        writeln!(output, "     (no FlowRuns are currently registered)")?;
+    } else {
+        for flow in flow_runs {
+            let flow_id = flow
+                .get("flowId")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            let board_id = flow
+                .get("boardId")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            let pending_sync = flow
+                .get("pendingSync")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            writeln!(
+                output,
+                "  FlowRun {} · board {} · revision {} · {}",
+                sanitize(flow_id, 96),
+                sanitize(board_id, 96),
+                flow.get("flowRevision")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or_default(),
+                if pending_sync {
+                    "Flowboard sync pending"
+                } else {
+                    "Flowboard synchronized"
+                }
+            )?;
+            if let Some(tasks) = flow.get("tasks").and_then(serde_json::Value::as_object) {
+                for (task_id, task) in tasks {
+                    let title = task
+                        .get("title")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or(task_id);
+                    let state = task
+                        .get("state")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("unknown");
+                    let waiting = task
+                        .get("waitingReason")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("-");
+                    writeln!(
+                        output,
+                        "    {} · {} · waiting {}",
+                        sanitize(title, 72),
+                        sanitize(state, 24),
+                        sanitize(waiting, 72)
+                    )?;
+                    writeln!(
+                        output,
+                        "      task {} · post {}",
+                        sanitize(task_id, 96),
+                        sanitize(
+                            task.get("postId")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("unknown"),
+                            96
+                        )
+                    )?;
+                    if let Some(attempt_id) =
+                        task.get("attemptId").and_then(serde_json::Value::as_str)
+                    {
+                        writeln!(
+                            output,
+                            "      attempt {} · generation {}",
+                            sanitize(attempt_id, 96),
+                            task.get("generation")
+                                .and_then(serde_json::Value::as_u64)
+                                .map(|value| value.to_string())
+                                .unwrap_or_else(|| "unknown".into())
+                        )?;
+                    }
+                    if let Some(process_id) =
+                        task.get("processId").and_then(serde_json::Value::as_str)
+                    {
+                        writeln!(output, "      process {}", sanitize(process_id, 96))?;
+                    }
+                    if let Some(runtime_run_id) =
+                        task.get("runtimeRunId").and_then(serde_json::Value::as_str)
+                    {
+                        writeln!(output, "      runtime {}", sanitize(runtime_run_id, 96))?;
+                    }
+                    if task
+                        .get("cancelRequested")
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(true)
+                    {
+                        writeln!(
+                            output,
+                            "      cancellation requested · awaiting worker outcome"
+                        )?;
+                    } else if state == "cancelled" {
+                        writeln!(output, "      cancellation confirmed by worker outcome")?;
+                    }
+                    if let Some(outcome) = task.get("lastOutcome") {
+                        let outcome_status = outcome
+                            .get("status")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("unknown");
+                        let reason = outcome
+                            .get("reason")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("");
+                        let suffix = if reason.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" · {}", sanitize(reason, 72))
+                        };
+                        writeln!(
+                            output,
+                            "      outcome {}{}",
+                            sanitize(outcome_status, 32),
+                            suffix
+                        )?;
+                        if let Some(evidence) = outcome.get("evidence") {
+                            writeln!(output, "      evidence {}", display_value(evidence, 120))?;
+                        }
+                    }
+                }
+            }
+            if let Some(error) = flow.get("syncError").and_then(serde_json::Value::as_str) {
+                writeln!(output, "    Flowboard sync error: {}", sanitize(error, 100))?;
+            }
         }
     }
     if detail {
@@ -558,6 +843,11 @@ fn sanitize(text: &str, max_chars: usize) -> String {
         .collect()
 }
 
+fn display_value(value: &serde_json::Value, max_chars: usize) -> String {
+    let text = serde_json::to_string(value).unwrap_or_else(|_| "<unavailable>".into());
+    sanitize(&text, max_chars)
+}
+
 #[cfg(unix)]
 fn open_terminal() -> io::Result<(std::fs::File, std::fs::File)> {
     use std::fs::OpenOptions;
@@ -585,7 +875,11 @@ fn open_terminal() -> io::Result<(std::fs::File, std::fs::File)> {
 #[cfg(test)]
 mod tests {
     use super::{apply_event, draw, read_responses, sanitize};
-    use agent_supervisor::tui::{read_frame, write_frame, TuiProcess, TuiRequest, TuiResponse};
+    use agent_supervisor::tui::{
+        read_frame, write_frame, TuiActivity, TuiAttempt, TuiProcess, TuiRequest, TuiResponse,
+        TuiRun,
+    };
+    use serde_json::json;
     use tokio::io::duplex;
 
     #[test]
@@ -597,11 +891,150 @@ mod tests {
     #[test]
     fn view_only_tui_prompt_does_not_offer_stop_controls() {
         let mut output = Vec::new();
-        draw(&mut output, &[], 0, false, None, "Connected", false).unwrap();
+        draw(
+            &mut output,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            0,
+            false,
+            None,
+            "Connected",
+            false,
+        )
+        .unwrap();
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("j/k move, i details, r refresh"));
         assert!(!output.contains("s stop"));
         assert!(!output.contains("a stop all"));
+    }
+
+    #[test]
+    fn flowrun_view_joins_task_attempt_process_evidence_and_waiting_state() {
+        let mut output = Vec::new();
+        let run = TuiRun {
+            run_id: "run-1".into(),
+            manager_id: "manager-1".into(),
+            status: "running".into(),
+            context: json!({"projectId":"project-1","flowRunId":"flow-1","taskId":"task-1"}),
+            revision: 2,
+            updated_at_ms: 10_000,
+        };
+        let activity = TuiActivity {
+            activity_id: "activity-1".into(),
+            run_id: "run-1".into(),
+            kind: "flowrun_task".into(),
+            status: "waitingForApproval".into(),
+            health: "healthy".into(),
+            last_contact_at_ms: Some(9_500),
+            waiting_reason: Some("review needed".into()),
+            revision: 3,
+            updated_at_ms: 10_000,
+        };
+        let attempt = TuiAttempt {
+            attempt_id: "attempt-1".into(),
+            activity_id: "activity-1".into(),
+            run_id: "run-1".into(),
+            generation: 4,
+            status: "running".into(),
+            cancellation: "requested".into(),
+            process_ids: vec!["v1:manager-1:7".into()],
+            reports: vec![json!({"detail":{"evidence":{"summary":"checked"}}})],
+            revision: 4,
+            updated_at_ms: 10_000,
+        };
+        let process = TuiProcess {
+            process_id: "v1:manager-1:7".into(),
+            pid: 123,
+            alive: true,
+            executable: Some("worker".into()),
+            framework: Some("LangGraph".into()),
+            run_label: Some("task worker".into()),
+            project_id: Some("project-1".into()),
+            flow_run_id: Some("flow-1".into()),
+            task_id: Some("task-1".into()),
+            post_id: Some("post-1".into()),
+            worker_id: Some("worker-1".into()),
+            runtime_run_id: Some("runtime-1".into()),
+        };
+        let flow = json!({
+            "flowId":"flow-1", "boardId":"board-1", "flowRevision":9,
+            "pendingSync":true, "syncError":"temporary failure",
+            "tasks":{"task-1":{
+                "postId":"post-1", "title":"Inspect", "state":"running",
+                "waitingReason":"worker approval", "attemptId":"attempt-1", "generation":4,
+                "processId":"v1:manager-1:7", "runtimeRunId":"runtime-1",
+                "cancelRequested":true,
+                "lastOutcome":{"status":"unknown","reason":"awaiting \u{1b}[31mhost","evidence":{"step":"checkpoint\u{1b}[31m"}}
+            }}
+        });
+        draw(
+            &mut output,
+            &[run],
+            &[activity],
+            &[attempt],
+            &[flow],
+            &[process],
+            0,
+            false,
+            None,
+            "Supervisor connection stale/disconnected",
+            false,
+        )
+        .unwrap();
+        let output = String::from_utf8(output).unwrap();
+        for expected in [
+            "1 Supervisor run(s) · 1 active process(es)",
+            "LangGraph · running · project project-1 · FlowRun flow-1 · task task-1",
+            "flowrun_task · waitingForApproval · health healthy · waiting review needed · last contact 9500",
+            "attempt 4 · running · cancel requested",
+            "process v1:manager-1:7 · LangGraph",
+            "Flowboard sync pending",
+            "task task-1 · post post-1",
+            "attempt attempt-1 · generation 4",
+            "runtime runtime-1",
+            "cancellation requested · awaiting worker outcome",
+            "outcome unknown · awaiting [31mhost",
+            "evidence {\"step\":\"checkpoint\\u001b[31m\"}",
+            "temporary failure",
+            "Supervisor connection stale/disconnected",
+        ] {
+            assert!(output.contains(expected), "missing {expected:?} in {output}");
+        }
+        assert!(!output.contains("cancellation confirmed by worker outcome"));
+        assert_eq!(
+            output.matches('\u{1b}').count(),
+            2,
+            "only the intentional screen-clear escapes may reach the terminal"
+        );
+    }
+
+    #[test]
+    fn flowrun_view_reports_confirmed_cancellation_from_terminal_worker_state() {
+        let mut output = Vec::new();
+        let flow = json!({
+            "flowId":"flow-1", "boardId":"board-1", "pendingSync":false,
+            "tasks":{"task-1":{"postId":"post-1","title":"Inspect","state":"cancelled","cancelRequested":false}}
+        });
+        draw(
+            &mut output,
+            &[],
+            &[],
+            &[],
+            &[flow],
+            &[],
+            0,
+            false,
+            None,
+            "Connected",
+            false,
+        )
+        .unwrap();
+        assert!(String::from_utf8(output)
+            .unwrap()
+            .contains("cancellation confirmed by worker outcome"));
     }
 
     #[tokio::test]
@@ -668,6 +1101,10 @@ mod tests {
                     version: 1,
                     request_id: 1,
                     processes: vec![event_process],
+                    runs: vec![],
+                    activities: vec![],
+                    attempts: vec![],
+                    flow_runs: vec![],
                 },
             )
             .await

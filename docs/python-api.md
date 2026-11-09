@@ -188,7 +188,7 @@ asyncio.run(main())
 
 The `Supervisor` launches and owns this separate TUI process, then stops it
 when the supervisor is dropped. See the
-[Python TUI example](../examples/python/supervisor_tui.py) for launching the
+[Python TUI example](https://github.com/RooAGI/agent-supervisor/blob/main/examples/python/supervisor_tui.py) for launching the
 dashboard with multiple framework-labelled background jobs.
 
 See the runnable [Python background-job example](https://github.com/RooAGI/agent-supervisor/blob/main/examples/python/supervisor_background_jobs.py).

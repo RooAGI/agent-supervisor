@@ -2,6 +2,7 @@
 
 use crate::{ManagedProcessInfo, ProcessStopResult, Supervisor, SupervisorProcessId};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::io;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -56,12 +57,28 @@ pub enum TuiResponse {
         version: u8,
         request_id: u64,
         processes: Vec<TuiProcess>,
+        #[serde(default)]
+        runs: Vec<TuiRun>,
+        #[serde(default)]
+        activities: Vec<TuiActivity>,
+        #[serde(default)]
+        attempts: Vec<TuiAttempt>,
+        #[serde(default, rename = "flowRuns")]
+        flow_runs: Vec<Value>,
     },
     #[serde(rename = "processes")]
     Processes {
         version: u8,
         request_id: u64,
         processes: Vec<TuiProcess>,
+        #[serde(default)]
+        runs: Vec<TuiRun>,
+        #[serde(default)]
+        activities: Vec<TuiActivity>,
+        #[serde(default)]
+        attempts: Vec<TuiAttempt>,
+        #[serde(default, rename = "flowRuns")]
+        flow_runs: Vec<Value>,
     },
     #[serde(rename = "process_changed")]
     ProcessChanged {
@@ -97,6 +114,46 @@ pub enum TuiResponse {
         code: String,
         message: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TuiRun {
+    pub run_id: String,
+    pub manager_id: String,
+    pub status: String,
+    pub context: Value,
+    pub revision: u64,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TuiActivity {
+    pub activity_id: String,
+    pub run_id: String,
+    pub kind: String,
+    pub status: String,
+    pub health: String,
+    pub last_contact_at_ms: Option<u64>,
+    pub waiting_reason: Option<String>,
+    pub revision: u64,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TuiAttempt {
+    pub attempt_id: String,
+    pub activity_id: String,
+    pub run_id: String,
+    pub generation: u64,
+    pub status: String,
+    pub cancellation: String,
+    pub process_ids: Vec<String>,
+    pub reports: Vec<Value>,
+    pub revision: u64,
+    pub updated_at_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -387,6 +444,10 @@ async fn serve_inner<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
                         version: PROTOCOL_VERSION,
                         request_id,
                         processes,
+                        runs: Vec::new(),
+                        activities: Vec::new(),
+                        attempts: Vec::new(),
+                        flow_runs: Vec::new(),
                     },
                 )
                 .await?;
@@ -403,6 +464,10 @@ async fn serve_inner<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
                         version: PROTOCOL_VERSION,
                         request_id,
                         processes,
+                        runs: Vec::new(),
+                        activities: Vec::new(),
+                        attempts: Vec::new(),
+                        flow_runs: Vec::new(),
                     },
                 )
                 .await?;

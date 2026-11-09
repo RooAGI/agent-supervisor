@@ -20,7 +20,7 @@ application remains responsible for identity, authentication, authorization,
 and orchestration. Enforcement depends on the operating system and selected
 policy; inspect the execution result and platform capabilities.
 
-The current version in this checkout is **0.3.0**.
+The current version in this checkout is **0.3.1**.
 
 ## Who it is for
 
@@ -178,7 +178,7 @@ Add the crate:
 
 ```toml
 [dependencies]
-agent-supervisor = "0.3.0"
+agent-supervisor = "0.3.1"
 ```
 
 
@@ -223,7 +223,7 @@ Install the Python package from PyPI:
 python -m pip install agent-supervisor
 ```
 
-To use the current 0.3.0 source from this checkout, build it with maturin; the
+To use the current 0.3.1 source from this checkout, build it with maturin; the
 build steps are in [`python/README.md`](python/README.md).
 
 See the [Python API guide](docs/python-api.md) for capture, streaming,
@@ -280,7 +280,8 @@ behavior, and release notes:
 
 ## Release
 
-See the [0.3.0 release notes](docs/releases/0.3.0.md) for manager-owned jobs,
+See the [0.3.1 release notes](docs/releases/0.3.1.md) for service coordination,
+the [0.3.0 release notes](docs/releases/0.3.0.md) for manager-owned jobs,
 supervisor-scoped process IDs, and store/resume behavior; the [0.2.0 release notes](docs/releases/0.2.0.md) cover agent-run scopes and
 MCP integrations, the [0.1.3 notes](docs/releases/0.1.3.md) for the optional WASM
 runner, the [0.1.2 notes](docs/releases/0.1.2.md) for Python bindings, and the
