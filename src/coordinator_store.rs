@@ -7,6 +7,9 @@
 //! Supervisor bookkeeping; it cannot make framework side effects exactly
 //! once and does not restore a live framework task.
 
+// Some recovery metadata is persisted for diagnostics and future replay paths.
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::VecDeque;
@@ -658,7 +661,6 @@ impl CoordinatorStore {
         }
         let new_file = OpenOptions::new()
             .read(true)
-            .write(true)
             .append(true)
             .open(&self.path)
             .map_err(|source| {
@@ -965,7 +967,7 @@ fn classify_snapshot_attempts(snapshot: Option<&Value>) -> Vec<RecoveredAttempt>
 
 fn trim_events(events: &mut VecDeque<DurableEvent>) {
     while events.len() > MAX_RETAINED_EVENTS
-        || events.iter().map(|event| encoded_len(event)).sum::<usize>() > MAX_RETAINED_EVENT_BYTES
+        || events.iter().map(encoded_len).sum::<usize>() > MAX_RETAINED_EVENT_BYTES
     {
         if events.pop_front().is_none() {
             break;
@@ -975,11 +977,7 @@ fn trim_events(events: &mut VecDeque<DurableEvent>) {
 
 fn trim_receipts(receipts: &mut VecDeque<CommandReceipt>) {
     while receipts.len() > MAX_IDEMPOTENCY_RECEIPTS
-        || receipts
-            .iter()
-            .map(|receipt| encoded_len(receipt))
-            .sum::<usize>()
-            > MAX_IDEMPOTENCY_BYTES
+        || receipts.iter().map(encoded_len).sum::<usize>() > MAX_IDEMPOTENCY_BYTES
     {
         if receipts.pop_front().is_none() {
             break;

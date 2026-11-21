@@ -4,6 +4,10 @@
 //! the Supervisor service. Snapshots and replay cursors are in-memory service
 //! state; clients must resnapshot after epoch changes or replay gaps.
 
+// These methods serialize protocol records with distinct fencing and timeout
+// fields; keeping the fields explicit makes the wire contract easy to audit.
+#![allow(clippy::too_many_arguments)]
+
 use crate::Policy;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -1227,7 +1231,7 @@ impl SupervisorServiceClient {
     }
 
     async fn open(&self) -> Result<Connection, ServiceClientError> {
-        if self.token.as_bytes().len() < 32 {
+        if self.token.len() < 32 {
             return Err(ServiceClientError::Unauthorized(self.role.as_str().into()));
         }
         let stream = UnixStream::connect(&self.socket_path).await?;
@@ -1403,7 +1407,7 @@ async fn read_response<R: AsyncBufRead + Unpin>(
     }
 }
 
-fn response_string<'a>(value: &'a Value, key: &str) -> Result<String, ServiceClientError> {
+fn response_string(value: &Value, key: &str) -> Result<String, ServiceClientError> {
     value
         .get(key)
         .and_then(Value::as_str)

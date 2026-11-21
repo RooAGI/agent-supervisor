@@ -3,6 +3,9 @@
 //! This module models workflow readiness and creates idempotent events. It
 //! never launches workers and never treats a process exit as workflow success.
 
+// Some typed states are retained for coordinator recovery and adapter hooks.
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, VecDeque};

@@ -318,8 +318,7 @@ async fn service_request(
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
     );
     if response["type"] == "error" {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        return Err(std::io::Error::other(
             response["message"]
                 .as_str()
                 .unwrap_or("service request failed"),

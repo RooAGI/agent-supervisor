@@ -294,6 +294,7 @@ impl SupervisorService {
 
     /// Install a service-owned FlowRun worker dispatcher. The scheduler and
     /// its worker attachments live with the Supervisor service process.
+    #[allow(dead_code)]
     pub(crate) fn with_workflow_dispatcher(
         mut self,
         dispatcher: Arc<dyn WorkflowDispatcher>,
@@ -455,10 +456,9 @@ impl SupervisorService {
                 recovery.clone(),
             );
             coordinator.wait_ready().await.map_err(|error| {
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("coordinator recovery could not be durably committed: {error}"),
-                )
+                io::Error::other(format!(
+                    "coordinator recovery could not be durably committed: {error}"
+                ))
             })?;
             self.coordinator.set(coordinator).map_err(|_| {
                 io::Error::new(
@@ -2677,6 +2677,7 @@ fn output_capability(
         })
 }
 
+#[cfg(test)]
 fn output_process(registry: &mut CapabilityRegistry, token: &[u8], now: Instant) -> Option<String> {
     output_capability(registry, token, now).map(|(process_id, _)| process_id)
 }
@@ -4707,6 +4708,9 @@ print(json.dumps({
                         == crate::workflow::WorkflowTaskState::Cancelled
                         && flow.tasks["task-worker-sibling-e2e"].state
                             == crate::workflow::WorkflowTaskState::WaitingForApproval
+                }) && snapshot.tool_requests.iter().any(|request| {
+                    request.attempt_id == attempt_id
+                        && request.state == crate::coordinator::WorkerToolRequestState::Cancelled
                 }) {
                     break;
                 }
@@ -4715,10 +4719,15 @@ print(json.dumps({
         })
         .await
         .expect("service-owned worker cancellation is reconciled after the client disconnects");
-        assert_eq!(
-            coordinator_service.coordinator().snapshot().tool_requests[0].state,
-            crate::coordinator::WorkerToolRequestState::Cancelled
-        );
+        assert!(coordinator_service
+            .coordinator()
+            .snapshot()
+            .tool_requests
+            .iter()
+            .any(|request| {
+                request.attempt_id == attempt_id
+                    && request.state == crate::coordinator::WorkerToolRequestState::Cancelled
+            }));
         assert_eq!(
             coordinator_service
                 .coordinator()

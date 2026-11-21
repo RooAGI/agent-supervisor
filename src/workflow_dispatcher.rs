@@ -216,15 +216,17 @@ impl WorkflowDispatcher for RuntimeWorkerDispatcher {
                 "workerId":format!("supervisor:{}", request.attempt_id),
                 "runtimeRunId":runtime_run_id,
             });
-            let mut policy = Policy::default();
-            policy.environment = self.config.environment.clone();
-            policy.network = NetworkMode::Host;
-            policy.limits = ResourceLimits {
-                timeout_ms: Duration::from_secs(24 * 60 * 60).as_millis() as u64,
-                input_bytes: MAX_WORKER_EVENT_BYTES,
-                output_bytes: MAX_WORKER_EVENT_BYTES,
-                stderr_bytes: 256 * 1024,
-                ..ResourceLimits::default()
+            let policy = Policy {
+                environment: self.config.environment.clone(),
+                network: NetworkMode::Host,
+                limits: ResourceLimits {
+                    timeout_ms: Duration::from_secs(24 * 60 * 60).as_millis() as u64,
+                    input_bytes: MAX_WORKER_EVENT_BYTES,
+                    output_bytes: MAX_WORKER_EVENT_BYTES,
+                    stderr_bytes: 256 * 1024,
+                    ..ResourceLimits::default()
+                },
+                ..Policy::default()
             };
             let client = self.client().await?;
             let process = client

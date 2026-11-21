@@ -3,6 +3,12 @@
 //! wire messages into these typed commands; this module owns state ordering,
 //! attempt generations, deadlines, and non-blocking event publication.
 
+// These internal command handlers mirror the service protocol's field sets;
+// some recovery and coordinator operations are intentionally reserved for
+// service routes that are not enabled in every build configuration.
+#![allow(dead_code)]
+#![allow(clippy::too_many_arguments)]
+
 use crate::coordinator_store::{
     CommitOutcome, CoordinatorStore, CoordinatorStoreError, RecoveryDiagnostics, RecoveryState,
     ReservationOutcome, RestartClassification,
