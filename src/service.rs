@@ -3741,7 +3741,10 @@ mod tests {
         let writer = tokio::spawn(async move {
             let mut client = client;
             tokio::time::sleep(Duration::from_millis(300)).await;
-            client.write_all(b"{\"type\":\"snapshot\"}\n").await.unwrap();
+            client
+                .write_all(b"{\"type\":\"snapshot\"}\n")
+                .await
+                .unwrap();
             client
         });
         read_session_request(&mut reader, &mut line, frame_timeout)
