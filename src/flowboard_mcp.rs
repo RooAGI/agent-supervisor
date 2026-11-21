@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::io;
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -39,6 +40,7 @@ struct McpProcess {
 }
 
 impl McpStdioFlowboardSink {
+    #[cfg(unix)]
     pub(crate) fn new(config: FlowboardMcpConfig) -> Arc<Self> {
         Arc::new(Self {
             config,
@@ -46,6 +48,7 @@ impl McpStdioFlowboardSink {
         })
     }
 
+    #[cfg(unix)]
     pub(crate) async fn shutdown(&self) {
         if let Some(mut process) = self.process.lock().await.take() {
             let _ = process.child.kill().await;

@@ -4700,7 +4700,7 @@ print(json.dumps({
         );
         drop(cancel_reader);
         drop(cancel_writer);
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 let snapshot = coordinator_service.coordinator().snapshot();
                 if snapshot.flow_runs.first().is_some_and(|flow| {
@@ -4711,6 +4711,8 @@ print(json.dumps({
                 }) && snapshot.tool_requests.iter().any(|request| {
                     request.attempt_id == attempt_id
                         && request.state == crate::coordinator::WorkerToolRequestState::Cancelled
+                }) && !snapshot.processes.iter().any(|process| {
+                    process.attempt_id.as_deref() == Some(attempt_id.as_str()) && process.alive
                 }) {
                     break;
                 }
