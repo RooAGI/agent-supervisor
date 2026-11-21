@@ -2,7 +2,7 @@
 
 Python bindings for the `agent-supervisor` native process supervisor.
 
-Version 0.3.0 source provides bounded one-shot execution, output-event
+Version 0.3.2 source provides bounded one-shot execution, output-event
 streaming, manager-owned background jobs, supervisor-scoped process IDs, and
 agent-run lifecycle management through the native Linux, macOS, and Windows
 backends. The Rust crate's optional WASM runner is not exposed by the Python
@@ -26,7 +26,7 @@ The API and supported platform behavior are documented in
 optional stdio adapters for the official MCP Python SDK and Prefect FastMCP; see
 [`../docs/mcp.md`](../docs/mcp.md) for complete server examples and installation steps.
 
-The 0.3.0 source includes optional run adapters for OpenAI Agents SDK,
+The 0.3.2 source includes optional run adapters for OpenAI Agents SDK,
 Microsoft Agent Framework, LangGraph, PydanticAI, and Google ADK. From a
 checkout, install an adapter with its matching extra, for example:
 
