@@ -563,3 +563,5 @@ function providerMetadata(request) {
       runtimeRunId: context.runtimeRunId
   }
 }
+
+export { AgentRun, AgentRunPolicy, CancellationToken, Command, Policy, Supervisor, SupervisorEventStream, SupervisorProcessId, SupervisedProcess, platformCapabilities, run } from './embedded.mjs'

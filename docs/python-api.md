@@ -22,16 +22,16 @@ For application startup and shutdown, see the [Supervisor guide](supervisor-life
 
 ## Install
 
-Install the published Python package with:
+Install the published package with the optional dependency for your framework.
+For example, to use the OpenAI Agents SDK adapter:
 
 ```bash
-python -m pip install agent-supervisor
+python -m pip install 'agent-supervisor[openai]'
 ```
 
-Persistent-process support and the run adapters described below are included
-in the repository source. To use them with a framework dependency, clone the
-repository and install the matching extra from the `python` directory. For
-example:
+The published package includes the embedded supervisor, process APIs, and
+framework adapters. For development against the repository source, clone it
+and install the matching extra from the `python` directory:
 
 ```bash
 git clone https://github.com/RooAGI/agent-supervisor.git
@@ -39,10 +39,10 @@ cd agent-supervisor/python
 python -m pip install -e '.[openai]'
 ```
 
-Replace `openai` with `microsoft`, `langgraph`, `pydantic-ai`, or `google-adk`
-for another adapter. The package requires Python 3.9 or newer. Source builds
-also need Rust and your platform's native build tools. See the
-[quickstart](quickstart.md) for platform setup.
+Replace `openai` with `microsoft`, `langgraph`, `pydantic-ai`, `google-adk`,
+`mcp`, or `fastmcp` for another optional integration. The package requires
+Python 3.9 or newer. Source builds also need Rust and your platform's native
+build tools. See the [quickstart](quickstart.md) for the first command.
 
 ## Supervisor
 

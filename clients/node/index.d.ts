@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { PassThrough, Writable } from 'node:stream'
+import { Buffer } from 'node:buffer'
 
 export type SupervisorRole = 'view' | 'control' | 'tui' | 'reporter' | 'canceller' | 'output'
 export type ExecutionStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'blocked' | 'unknown'
@@ -192,3 +193,136 @@ export function createManagedProcessLauncher(options: {
   stop(handle: SupervisorProcessHandle, graceMs?: number): Promise<unknown>
 }
 export function validateProviderEnvironment(request: ManagedProcessRequest, policy: object): void
+
+export interface CommandOptions { cwd?: string }
+export interface CommandInput { argv: string[]; cwd?: string }
+export interface AgentRunOptions { timeoutMs?: number; shutdownGraceMs?: number }
+export interface ExecutionOutput {
+  success: boolean
+  stdout: Buffer
+  stderr: Buffer
+  enforcement: unknown
+  executable: unknown
+  termination: unknown
+}
+export interface NativeProcessEvent {
+  kind: 'started' | 'stdout' | 'stderr' | 'exited'
+  processId?: number
+  data?: Buffer
+  receipt?: unknown
+  executable?: unknown
+}
+export interface ManagedProcessResult {
+  stdout: Buffer
+  stderr: Buffer
+  outputTruncated: boolean
+  receipt: unknown
+  error?: string | null
+}
+export interface ManagedProcessInfo {
+  supervisorProcessId: string
+  processId: number
+  alive: boolean
+  parentProcessId: number | null
+  startTimeTicks: string | null
+  executable: string | null
+  framework: string | null
+  runLabel: string | null
+  projectId: string | null
+  flowRunId: string | null
+  taskId: string | null
+  postId: string | null
+  workerId: string | null
+  runtimeRunId: string | null
+}
+
+export class Command {
+  constructor(argv: string[], options?: CommandOptions)
+  readonly argv: string[]
+  readonly cwd?: string
+}
+export class Policy {
+  constructor(options?: Record<string, unknown>)
+  environment: Record<string, unknown>
+  filesystem: unknown
+  network: string
+  limits: Record<string, unknown>
+  enforcement: string
+}
+export class AgentRunPolicy {
+  constructor(options?: AgentRunOptions)
+  readonly timeoutMs: number
+  readonly shutdownGraceMs: number
+}
+export class CancellationToken {
+  constructor()
+  readonly isCancelled: boolean
+  cancel(): void
+}
+export class SupervisorProcessId {
+  constructor(token: string)
+  readonly token: string
+  toString(): string
+  toJSON(): string
+}
+export class SupervisedProcess implements AsyncIterable<NativeProcessEvent> {
+  readonly supervisorProcessId: SupervisorProcessId | null
+  write(data: Uint8Array | string): Promise<void>
+  closeStdin(): Promise<void>
+  wait(): Promise<unknown>
+  shutdown(options?: { graceMs?: number }): Promise<unknown>
+  nextEvent(): Promise<NativeProcessEvent | null>
+  events(): AsyncGenerator<NativeProcessEvent>
+  [Symbol.asyncIterator](): AsyncGenerator<NativeProcessEvent>
+}
+export interface SupervisorEvent {
+  sequence: string
+  runId?: string | null
+  processId?: string | null
+  kind: 'runStarted' | 'runEnded' | 'started' | 'stdout' | 'stderr' | 'exited' | 'agent' | 'lagged'
+  data?: Buffer | null
+  receipt?: unknown
+  executable?: unknown
+  payload?: unknown
+  dropped?: string
+}
+export class SupervisorEventStream implements AsyncIterable<SupervisorEvent> {
+  nextEvent(): Promise<SupervisorEvent | null>
+  events(): AsyncGenerator<SupervisorEvent>
+  [Symbol.asyncIterator](): AsyncGenerator<SupervisorEvent>
+}
+export class AgentRun {
+  readonly id: string
+  readonly activeProcesses: number
+  runCommand(command: Command | CommandInput | string[], options?: { policy?: object; input?: Uint8Array }): Promise<ExecutionOutput>
+  start(command: Command | CommandInput | string[], options?: { policy?: object }): SupervisedProcess
+  cancel(): void
+  cancelNow(): void
+  waitCleanup(): Promise<void>
+  publishAgentEvent(payload: unknown): void
+  stream(): SupervisorEventStream
+  run<T>(operation: (run: AgentRun, options: { signal: AbortSignal }) => T | Promise<T>, options?: { signal?: AbortSignal }): Promise<T>
+}
+export class Supervisor {
+  constructor()
+  readonly activeProcesses: number
+  readonly activeAgentRuns: number
+  startAgentRun(policy?: AgentRunPolicy | AgentRunOptions): AgentRun
+  runCommand(command: Command | CommandInput | string[], options?: { policy?: object; input?: Uint8Array; cancellation?: CancellationToken; signal?: AbortSignal }): Promise<ExecutionOutput>
+  start(command: Command | CommandInput | string[], options?: { policy?: object }): SupervisedProcess
+  startBackground(command: Command | CommandInput | string[], options?: { policy?: object }): Promise<SupervisorProcessId>
+  processStatus(processId: SupervisorProcessId | string): 'running' | 'completed' | 'failed' | null
+  processInfo(processId: SupervisorProcessId | string): ManagedProcessInfo | null
+  processResult(processId: SupervisorProcessId | string): ManagedProcessResult | null
+  takeProcessResult(processId: SupervisorProcessId | string): ManagedProcessResult | null
+  forgetProcess(processId: SupervisorProcessId | string): boolean
+  waitProcess(processId: SupervisorProcessId | string): Promise<ManagedProcessResult | null>
+  writeProcessStdin(processId: SupervisorProcessId | string, data: Uint8Array | string): Promise<void>
+  closeProcessStdin(processId: SupervisorProcessId | string): Promise<void>
+  shutdownProcess(processId: SupervisorProcessId | string, options?: { graceMs?: number }): Promise<string>
+  shutdownAll(options?: { graceMs?: number }): Promise<Array<{ processId: string; stdout: Buffer; stderr: Buffer; outputTruncated: boolean; receipt: unknown; error?: string | null }>>
+  startTui(executable: string, args?: string[]): Promise<void>
+  stream(options?: { process?: SupervisorProcessId | string }): SupervisorEventStream
+}
+export function run(command: Command | CommandInput | string[], options?: { policy?: object; input?: Uint8Array; cancellation?: CancellationToken; signal?: AbortSignal }): Promise<ExecutionOutput>
+export function platformCapabilities(): Record<string, boolean | string>

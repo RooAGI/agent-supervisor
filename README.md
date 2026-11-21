@@ -1,264 +1,251 @@
 # RooAGI Agent Supervisor
 
-SUPERVISE AND CONTAIN AGENT TOOL EXECUTION
+**Supervise and contain the processes your agents start.**
 
-RooAGI Agent Supervisor gives your application control over every tool process
-it starts: bound its output, cancel it, clean up its children, and record how
-it finished. It is a Rust library for supervising commands, persistent
-subprocesses such as MCP servers, PTY sessions, and pipelines across Linux,
-macOS, and Windows.
+Agent Supervisor gives your application control over every tool process it
+launches: bound its output, enforce deadlines, cancel it, clean up its children,
+and record how it finished. It supervises one-shot commands, persistent
+subprocesses such as MCP servers, PTY sessions, and pipelines on Linux, macOS,
+and Windows. You can embed it from Rust, Python, or Node.js, or run it as an
+independent service that keeps processes alive while clients reconnect.
 
-Tool calls do not always end when their caller times out. A command can keep
+📖 **Documentation:** <https://rooagi.github.io/agent-supervisor/>
+
+## Why
+
+A tool call does not always end when its caller times out. A command can keep
 running, leave child processes behind, or flood an application's output
-buffers. Agent Supervisor brings deadlines, output limits, cancellation,
-process-tree cleanup, and structured termination results into one library, so
-you do not have to rebuild those behaviors around each subprocess API.
+buffers. Each tool adapter ends up reimplementing deadlines, output collection,
+process-tree cleanup, and platform-specific behavior.
 
-Your application decides what may run and supplies an authorized request.
-Agent Supervisor owns native process execution and lifecycle management; your
-application remains responsible for identity, authentication, authorization,
-and orchestration. Enforcement depends on the operating system and selected
-policy; inspect the execution result and platform capabilities.
+Agent Supervisor centralizes those responsibilities. Your application decides
+what may run; Agent Supervisor runs it under an explicit policy and returns a
+structured result, including after cancellation or failure.
 
-The current version in this checkout is **0.3.1**.
+It is useful for:
 
-## Who it is for
-
-Agent Supervisor is especially useful for:
-
-- **Rust desktop and CLI applications** that embed process control and need
-  dependable cancellation, bounded output, and child cleanup;
 - **Agent framework developers** who want consistent execution and cleanup
-  behavior across tool adapters; and
-- **Developers managing MCP servers and other persistent subprocesses** who
-  need startup, readiness, shutdown, process groups, and lifecycle events.
+  across tool adapters in Rust, Python, or Node.js;
+- **Desktop and CLI applications** that need dependable cancellation, bounded
+  output, and child cleanup; and
+- **Hosts of MCP servers and other long-running subprocesses** that need
+  startup, readiness, shutdown, and lifecycle events.
 
-Instead of writing bespoke wrappers around operating-system subprocess APIs,
-you can use one library for short-lived tool commands, long-running processes,
-and multi-process pipelines.
+## Features
 
-## The problem it solves
-
-Applications launch processes that may outlive a single tool call, create
-children, consume unbounded output, or survive cancellation. Each tool adapter
-can end up reimplementing deadlines, output collection, process-tree cleanup,
-and platform-specific behavior.
-
-RooAGI Agent Supervisor centralizes those responsibilities. It makes execution
-policy explicit, supervises process ownership and lifecycle, and returns
-structured results and errors that your application can record or act on.
-
-## What reliable execution means
-
-For each execution, the library provides a consistent control surface:
-
-- start only the executable and environment the runtime authorized;
-- limit input, output, time, memory, process count, and CPU where supported;
-- preserve host networking explicitly when tools need normal connectivity;
-- expose liveness, identity, lifecycle, and resource information; and
-- finish with a structured termination result, including after cancellation
-  or failure.
-
-## A sandbox layer for agent tools
-
-Agent Supervisor gives agent runtimes a boundary for tools, MCP servers, and
-other code they start. Choose native process execution for programs that need
-the operating system, or opt into the WebAssembly backend for self-contained
-computations. The library applies the policies you request and reports the
-capabilities the selected platform can enforce.
-
-### Run self-contained code with WebAssembly
-
-The optional `wasm` feature runs one-shot WebAssembly modules through Wasmi.
-Modules receive no host imports, and the runner applies configured memory and
-fuel limits. This suits generated or third-party code that can work through the
-documented input/output ABI without filesystem, network, or other host access.
-Native process execution remains the default for ordinary commands and tools.
-
-### Set boundaries for native tools
-
-Native tools can use explicit environment, filesystem, network, and resource
-policies, along with output limits, deadlines, cancellation, and process-tree
-cleanup. Enforcement varies by operating system and policy. Inspect reported
-platform capabilities and use required enforcement when a request must fail
-if a control is unavailable.
-
-### Where it fits
-
-- Run short-lived tools and agent-generated WebAssembly computations.
-- Keep long-running MCP servers and their child processes under supervision.
-- Integrate execution controls into a Rust agent runtime without moving
-  identity, credentials, authorization, or orchestration into the sandbox.
-
-Agent Supervisor is an embeddable Rust library, not a hosted agent platform.
-Native networking uses host access in compatibility mode; select
-`NetworkMode::Disabled` when the platform must deny IP networking. WebAssembly
-modules have no host imports. See the [security model](docs/security-model.md)
-for platform guarantees and [using agent SDKs](docs/api-boundaries.md) for an
-integration example.
-
-## Process control in one library
-
-- Run tools and MCP servers with bounded input, output, deadlines, and
-  cancellation.
-- Clean up complete process trees through shared process groups and native
-  containment backends.
-- Apply explicit environment, filesystem, network, and resource policies.
-- Observe members, identity, liveness, resource statistics, and lifecycle
-  events.
-- Connect pipelines and report failures with stage-level context.
-- Start PTY sessions with the same supervisor-owned lifecycle.
-- Wrap an existing local stdio `rmcp` server with
+- **Bounded execution:** input and output limits, deadlines, cancellation, and
+  TERM → grace → KILL shutdown.
+- **Process-tree cleanup:** shared process groups and native containment so
+  children do not outlive their owner.
+- **Explicit policy:** cleared-by-default environments, filesystem grants,
+  network disabling, and memory, process-count, and CPU limits where the
+  platform supports them.
+- **Agent runs:** scope the tools of one framework call to an `AgentRun` that
+  cleans up its processes when it settles, alongside manager-owned background
+  jobs that persist between runs.
+- **Observability:** identity, liveness, resource statistics, lifecycle event
+  streams, and structured termination results.
+- **Long-running processes:** MCP servers, TCP/port/HTTP readiness probes,
+  Unix PTYs and Windows ConPTY, and connected pipelines with stage-level
+  failure receipts.
+- **MCP adoption:** wrap an existing local stdio `rmcp` server with
   [`run_stdio_server`](docs/mcp.md#adopt-with-the-official-mcp-sdk).
-- Use one provider-neutral Rust API from any agent runtime.
+- **Supervisor service:** an authenticated local service with a run
+  coordinator and role-scoped clients, so processes are owned by the service
+  rather than by a desktop or framework client.
+- **Terminal process manager:** a TUI for inspecting and stopping supervised
+  processes.
+- **WebAssembly runner (opt-in):** run self-contained modules with no host
+  imports under memory and fuel limits.
 
-## Architecture
+## How it fits
 
 ```text
-agent runtime → authorized ExecutionRequest → agent-supervisor → native child or opt-in WASM module
+agent runtime → authorized request → Agent Supervisor → native child process
+                                                       └→ opt-in WASM module
 ```
 
-The runtime owns:
+| Your runtime owns | Agent Supervisor owns |
+| --- | --- |
+| User, project, session, and turn identity | Request validation |
+| Authentication and provider tokens | Native process creation and containment |
+| Authorization and path-grant selection | Environment, filesystem, and network policy |
+| MCP configuration and tool metadata | Deadlines, output limits, cancellation, cleanup |
+| Hooks, audit, retry, and orchestration | Process ownership, identity, and lifecycle events |
 
-- user, project, graph, session, and turn identity;
-- authentication and provider-token refresh;
-- authorization and path-grant selection;
-- MCP configuration and tool metadata;
-- hooks, audit records, prompt context, retry, and compaction; and
-- agent-level orchestration.
+Agent Supervisor never resolves credentials or makes authorization decisions.
+An MCP client can run through it, but provider authentication stays with your
+runtime. It is a process boundary, not a hosted agent platform or a complete
+container runtime.
 
-The sandbox owns:
+## Install
 
-- execution-request validation;
-- native process creation and containment, or explicitly selected one-shot WASM execution;
-- environment and filesystem policy enforcement;
-- deadlines, output limits, cancellation, and cleanup;
-- process-group ownership, introspection, and identity records; and
-- structured `SandboxError` values and lifecycle events.
+| Language | Install |
+| --- | --- |
+| Rust | `cargo add agent-supervisor` and `cargo add tokio --features macros,rt-multi-thread` |
+| Python (3.9+) | `python -m pip install agent-supervisor`, or with a framework extra such as `'agent-supervisor[openai]'` |
+| Node.js | `@rooagi/agent-supervisor` in [`clients/node`](clients/node/README.md); build the embedded addon from a checkout with `npm run build:native` |
 
-The sandbox does not resolve credentials or make agent authorization decisions.
-An MCP client can run through it, but provider authentication remains the
-runtime’s responsibility.
-
-## Native capabilities
-
-The supervisor supports:
-
-- Linux cgroup v2 resource limits and Landlock filesystem isolation;
-- Windows Job Object containment and AppContainer filesystem isolation;
-- macOS filesystem isolation through `/usr/bin/sandbox-exec`;
-- host-network passthrough with explicit platform behavior;
-- TERM/grace/KILL shutdown;
-- process groups, external adoption, and identity checks;
-- lifecycle event streams and bounded process snapshots;
-- optional resource statistics and sampling;
-- connected pipelines with stage-indexed failure receipts;
-- TCP, port, and HTTP readiness probes; and
-- Unix PTYs and Windows ConPTY.
-
-Inspect `platform_capabilities()` before requiring optional behavior. Select
-`EnforcementRequirement::Required` when degraded enforcement is unacceptable.
-
-The optional `wasm` Cargo feature adds a pure-computation backend for modules
-that use the [documented guest ABI](docs/wasm-backend.md). Native processes
-remain the default; WASM modules receive no host imports.
-
-## OpenShell developer adapter
-
-The OpenShell adapter is a developer preview under `dev/openshell-adapter/`,
-outside the published `agent-supervisor` crate. It depends on NVIDIA's Git-only
-Rust SDK and can be built from a checkout of this repository. The adapter
-bounds collected output and rejects policy requirements that the remote API
-cannot apply or verify. Read the [OpenShell adapter contract](docs/openshell.md)
-before experimenting with it.
+Python extras: `openai`, `microsoft`, `langgraph`, `pydantic-ai`, `google-adk`,
+`mcp`, and `fastmcp`. To build any package from source, see
+[`python/README.md`](python/README.md) and the
+[Node.js client README](clients/node/README.md).
 
 ## Quickstart
 
-Add the crate:
-
-```toml
-[dependencies]
-agent-supervisor = "0.3.1"
-```
-
-
-Create an explicit request and execute it:
+Run a command under the default policy. Commands run without a shell, and the
+executable must be an absolute path.
 
 ```rust
-use agent_supervisor::{
-    execute, EnforcementRequirement, EnvironmentPolicy, ExecutionRequest,
-    NetworkMode, ResourceLimits, SandboxPolicy,
-};
-use std::path::PathBuf;
+use agent_supervisor::{run, Command, Policy};
 
-let request = ExecutionRequest {
-    executable: PathBuf::from("/usr/bin/printf"),
-    args: vec!["hello\\n".into()],
-    working_directory: None,
-    policy: SandboxPolicy {
-        environment: EnvironmentPolicy::default(),
-        filesystem: None,
-        network: NetworkMode::Host,
-        limits: ResourceLimits::default(),
-        enforcement: EnforcementRequirement::BestEffort,
-    },
-};
-
-let output = execute(&request, b"").await?;
-assert!(output.success);
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let command = Command {
+        argv: vec!["/usr/bin/env".into(), "echo".into(), "hello".into()],
+        cwd: None,
+    };
+    let result = run(&command, &Policy::default()).await?;
+    print!("{}", String::from_utf8_lossy(&result.stdout));
+    Ok(())
+}
 ```
 
-For default-deny filesystem access, set `filesystem` to
-`Some(FilesystemPolicy::deny_all())` and add only the required
-`FilesystemGrant` entries.
+```python
+import asyncio
+import sys
+from agent_supervisor import Command, Policy, run
 
-See the [quickstart](docs/quickstart.md), [security model](docs/security-model.md),
-and [using agent SDKs](docs/api-boundaries.md) for the integration example.
+async def main():
+    result = await run(
+        Command([sys.executable, "-c", "print('hello from a supervised process')"]),
+        policy=Policy(),
+    )
+    print(result.stdout.decode(), end="")
 
-## Python bindings
-
-Install the Python package from PyPI:
-
-```bash
-python -m pip install agent-supervisor
+asyncio.run(main())
 ```
 
-To use the current 0.3.1 source from this checkout, build it with maturin; the
-build steps are in [`python/README.md`](python/README.md).
+```js
+import { Command, Policy, run } from '@rooagi/agent-supervisor'
 
-See the [Python API guide](docs/python-api.md) for capture, streaming,
-cancellation, and platform behavior.
+const result = await run(
+  new Command([process.execPath, '-e', "console.log('hello from a supervised process')"]),
+  { policy: new Policy() }
+)
+process.stdout.write(result.stdout)
+```
 
-## Network behavior
+Supervise an agent framework call so its tools are cleaned up when it ends.
+This example uses the OpenAI Agents SDK adapter:
 
-`NetworkMode::Host` is the supported compatibility mode in 0.1.0. The child
-uses the host resolver, interfaces, routes, firewall rules, and proxy
-environment. It does not create a network namespace, proxy, or destination
-allow-list.
+```python
+import asyncio
+from agents import Agent
+from agent_supervisor import Supervisor
+from agent_supervisor.openai import Runner
 
-`NetworkMode::Disabled` denies IP networking while retaining local Unix IPC
-where supported. Linux, macOS, and Windows use native enforcement; Windows
-requires an explicit filesystem policy because AppContainer provides both
-boundaries. See [host network mode](docs/network-host-mode.md) for the
-platform-specific contract and test requirements.
+agent = Agent(name="Assistant", instructions="Answer the user's question clearly.")
 
-## Filesystem and environment policy
+async def main():
+    supervisor = Supervisor()
+    try:
+        result = await Runner.run(agent, "What does Agent Supervisor do?", supervisor=supervisor)
+        print(result.final_output)
+    finally:
+        await supervisor.shutdown_all()
 
-Child environments are cleared by default. Variables must be explicitly
-inherited or supplied, and dynamic-loader variables such as `LD_PRELOAD` and
-`DYLD_*` are rejected.
+asyncio.run(main())
+```
 
-`filesystem: None` preserves unrestricted filesystem behavior for compatibility.
-`Some(FilesystemPolicy::deny_all())` is explicit default-deny access. Filesystem
-grants must use absolute paths and explicit access rights.
+The default policy keeps host networking and unrestricted filesystem access
+for compatibility. Narrow it for tools that need less. See the
+[quickstart](docs/quickstart.md) and
+[agent runs and SDK adapters](docs/api-boundaries.md).
 
-The sandbox is a process boundary, not a complete container runtime. Its
-guarantees depend on the native operating-system backend and the policy passed
-by the caller.
+## Embedded and service modes
 
-## Validation
+**Embedded mode:** your application owns its children in-process through
+`Supervisor`, using the same Rust core from Rust, Python, or Node.js. This is
+the default and works on all three platforms.
 
-Run the portable checks locally:
+**Service mode:** `agent-supervisor-service` owns processes independently of
+any client. A desktop app or framework can disconnect and reconnect, then
+reattach to a process by its stable Supervisor process ID. The service:
+
+- authenticates clients over a Unix-domain socket with separate `view`,
+  `control`, and `tui` role tokens, plus per-process output and per-attempt
+  reporter and canceller capabilities;
+- runs a **coordinator** that tracks runs, activities, worker attempts, and
+  FlowRuns with epoch/cursor-ordered event subscriptions; and
+- with `--state-dir`, journals coordinator state so terminal outcomes survive
+  a service restart. Unresolved launches are reported as unknown rather than
+  replayed.
+
+```sh
+cargo build --release --bin agent-supervisor-service
+agent-supervisor-service --init-credentials-dir "$XDG_CONFIG_HOME/agent-supervisor"
+```
+
+The standalone service currently supports Unix only; Windows uses embedded
+mode. See the [Node.js client](clients/node/README.md) for the service setup,
+the [run coordinator](docs/supervisor-coordinator.md), and the
+[Supervisor guide](docs/supervisor-lifecycle.md).
+
+**Terminal UI:** `agent-supervisor-tui` (built from [`tui/`](tui/)) inspects,
+attaches to, and stops supervised processes. See the
+[terminal process manager](docs/tui.md).
+
+## Platform support
+
+| Capability | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| Process-tree containment | Process groups, cgroup v2 | Process groups | Job Objects |
+| Resource limits | cgroup v2 | See `platform_capabilities()` | Job Objects |
+| Filesystem isolation | Landlock | `sandbox-exec` (Seatbelt) | AppContainer |
+| Network disable (`NetworkMode::Disabled`) | ✓ | ✓ | ✓, requires a filesystem policy |
+| PTY sessions | Unix PTY | Unix PTY | ConPTY |
+| Supervisor service | ✓ | ✓ | Embedded mode only |
+
+Enforcement depends on the operating system and the policy you pass. Call
+`platform_capabilities()` before relying on optional behavior, and set
+`EnforcementRequirement::Required` when a request must fail rather than run
+with degraded enforcement.
+
+## Security model
+
+- **Environment:** child environments are cleared by default. Variables must
+  be inherited or supplied explicitly, and dynamic-loader variables such as
+  `LD_PRELOAD` and `DYLD_*` are rejected.
+- **Filesystem:** `filesystem: None` keeps unrestricted access for
+  compatibility. `Some(FilesystemPolicy::deny_all())` denies by default; add
+  `FilesystemGrant` entries with absolute paths and explicit access rights.
+- **Network:** `NetworkMode::Host` uses the host resolver, routes, firewall,
+  and proxy environment with no namespace or allow-list.
+  `NetworkMode::Disabled` denies IP networking while keeping local Unix IPC
+  where supported.
+- **WebAssembly:** with the `wasm` Cargo feature, modules that use the
+  [guest ABI](docs/wasm-backend.md) run with no host imports, no filesystem or
+  network, and fixed memory and fuel limits.
+
+See the [security model](docs/security-model.md) and
+[host network mode](docs/network-host-mode.md) for each platform's guarantees.
+
+## OpenShell developer adapter (preview)
+
+An adapter for NVIDIA OpenShell lives in `dev/openshell-adapter/`, outside the
+published crate, because it depends on a Git-only SDK. It bounds collected
+output and rejects policy requirements the remote API cannot apply or verify.
+Read the [adapter contract](docs/openshell.md) before you experiment with it.
+
+## Releases
+
+The latest release is **0.3.1**, which adds the persistent Supervisor service
+and its coordinator. See the [release notes](docs/releases/) for every version.
+
+## Contributing
+
+Run the portable checks before you open a pull request:
 
 ```bash
 cargo fmt --all -- --check
@@ -266,30 +253,12 @@ cargo test --all-targets -- --test-threads=1
 cargo clippy --all-targets -- -D warnings
 ```
 
-Platform integration tests must execute on their native operating system.
-Cross-compilation verifies API bindings but does not replace native Linux,
-macOS, or Windows testing.
-
-## Documentation site
-
-The full documentation is published with MkDocs Material and includes the
-quickstart, security model, supervisor lifecycle, process groups, platform
-behavior, and release notes:
-
-<https://rooagi.github.io/agent-supervisor/>
-
-## Release
-
-See the [0.3.1 release notes](docs/releases/0.3.1.md) for service coordination,
-the [0.3.0 release notes](docs/releases/0.3.0.md) for manager-owned jobs,
-supervisor-scoped process IDs, and store/resume behavior; the [0.2.0 release notes](docs/releases/0.2.0.md) cover agent-run scopes and
-MCP integrations, the [0.1.3 notes](docs/releases/0.1.3.md) for the optional WASM
-runner, the [0.1.2 notes](docs/releases/0.1.2.md) for Python bindings, and the
-[0.1.1 notes](docs/releases/0.1.1.md) for the separate OpenShell developer
-adapter and its behavior limits.
+Platform integration tests must run on their native operating system;
+cross-compilation does not replace native Linux, macOS, or Windows testing. See
+[testing and coverage](docs/testing.md).
 
 ## License
 
-RooAGI Agent Supervisor is licensed under the [Apache License, Version 2.0](LICENSE).
-You may use, modify, and distribute it, including in open-source and
-commercial agent products, subject to the license terms.
+Licensed under the [Apache License, Version 2.0](LICENSE). You may use, modify,
+and distribute it, including in open-source and commercial agent products,
+subject to the license terms.

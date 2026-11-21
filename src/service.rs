@@ -2794,7 +2794,10 @@ async fn read_session_frame<R: tokio::io::AsyncBufRead + Unpin>(
                 "Supervisor service is shutting down",
             ));
         }
-        let read = tokio::time::timeout_at(deadline, read_frame(reader, line));
+        let read = tokio::time::timeout_at(
+            deadline,
+            read_session_request(reader, line, FRAME_READ_TIMEOUT),
+        );
         if let Some(receiver) = revocation.as_mut() {
             tokio::select! {
                 result = read => return result.unwrap_or_else(|_| Err(io::Error::new(io::ErrorKind::TimedOut,"authenticated session expired"))),
@@ -2818,13 +2821,24 @@ async fn read_session_frame<R: tokio::io::AsyncBufRead + Unpin>(
     }
 }
 
+/// A request line must arrive within this long once its first byte has.
+const FRAME_READ_TIMEOUT: Duration = Duration::from_secs(60);
+
 async fn read_frame<R: tokio::io::AsyncBufRead + Unpin>(
     reader: &mut R,
     line: &mut Vec<u8>,
 ) -> io::Result<()> {
+    read_frame_within(reader, line, FRAME_READ_TIMEOUT).await
+}
+
+async fn read_frame_within<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+    line: &mut Vec<u8>,
+    timeout: Duration,
+) -> io::Result<()> {
     line.clear();
     let n = tokio::time::timeout(
-        Duration::from_secs(60),
+        timeout,
         reader.take(MAX_FRAME as u64 + 1).read_until(b'\n', line),
     )
     .await
@@ -2842,6 +2856,25 @@ async fn read_frame<R: tokio::io::AsyncBufRead + Unpin>(
         ));
     }
     Ok(())
+}
+
+/// Reads the next request of an authenticated session. A client that attached
+/// to a process or subscribed to events only receives, so it may send nothing
+/// for hours: waiting for a request to begin is bounded by the session
+/// deadline alone. Only a request that has started but not finished is cut off
+/// after `frame_timeout`.
+async fn read_session_request<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+    line: &mut Vec<u8>,
+    frame_timeout: Duration,
+) -> io::Result<()> {
+    if reader.fill_buf().await?.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "socket closed",
+        ));
+    }
+    read_frame_within(reader, line, frame_timeout).await
 }
 async fn write_json<W: tokio::io::AsyncWrite + Unpin>(
     writer: &mut W,
@@ -3689,6 +3722,51 @@ mod tests {
             notified,
             "TUI stop attribution should be observable before exit"
         );
+    }
+
+    #[tokio::test]
+    async fn idle_session_waits_for_a_request_instead_of_timing_out() {
+        use tokio::io::{AsyncWriteExt, BufReader};
+        let frame_timeout = Duration::from_millis(50);
+        let (client, server) = tokio::io::duplex(1024);
+        let mut reader = BufReader::new(server);
+        let mut line = Vec::new();
+        // The old behaviour: an idle connection hit the frame timeout and the
+        // session ended, which dropped every attached worker event stream.
+        let idle = read_frame_within(&mut reader, &mut line, frame_timeout)
+            .await
+            .expect_err("frame read gives up on an idle connection");
+        assert_eq!(idle.kind(), io::ErrorKind::TimedOut);
+
+        let writer = tokio::spawn(async move {
+            let mut client = client;
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            client.write_all(b"{\"type\":\"snapshot\"}\n").await.unwrap();
+            client
+        });
+        read_session_request(&mut reader, &mut line, frame_timeout)
+            .await
+            .expect("an idle session keeps waiting for its next request");
+        assert_eq!(line, b"{\"type\":\"snapshot\"}\n");
+        let client = writer.await.unwrap();
+        drop(client);
+        let closed = read_session_request(&mut reader, &mut line, frame_timeout)
+            .await
+            .expect_err("a closed socket still ends the session");
+        assert_eq!(closed.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[tokio::test]
+    async fn partial_request_still_times_out() {
+        use tokio::io::{AsyncWriteExt, BufReader};
+        let (mut client, server) = tokio::io::duplex(1024);
+        let mut reader = BufReader::new(server);
+        let mut line = Vec::new();
+        client.write_all(b"{\"type\":").await.unwrap();
+        let error = read_session_request(&mut reader, &mut line, Duration::from_millis(50))
+            .await
+            .expect_err("a request that starts but never finishes is cut off");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
     }
 
     #[tokio::test]

@@ -1,4 +1,23 @@
-# Node client for Agent Supervisor
+# RooAGI Agent Supervisor
+
+## Keep the tools behind your agents under control
+
+Multi-agent applications often run many workers, and those workers launch
+commands, MCP servers, and other subprocesses. RooAGI Agent Supervisor gives
+that work a shared lifecycle: it tracks the processes, bounds their output,
+supports cancellation, and cleans up child processes.
+
+Think of it as the process supervisor around your agent system. Your framework
+still decides which agents to run, how to assign work, and whether a result is
+acceptable. Agent Supervisor manages the local processes those agents use and
+records their run and attempt activity. The independent service can keep those
+processes alive while a desktop or other client disconnects.
+
+The npm package `@rooagi/agent-supervisor` provides two Node.js integration
+modes: an embedded API backed by the Rust core, and an authenticated client for
+the independent Supervisor service.
+
+## Service mode: start the independent service
 
 Build the service with `cargo build --release --bin agent-supervisor-service`.
 Ask the Supervisor to issue the three role credentials into a new private
@@ -24,9 +43,18 @@ Each token file must be a regular file owned by the current user with mode
 `0600`. The service refuses a live socket and only removes an owned stale Unix
 socket. It sets the socket mode to `0600`.
 
-The published Node package name is `@rooagi/agent-supervisor-node`; the source
-entrypoint is `clients/node/index.mjs`. RooAGI Desktop can consume the local
-package with a `file:` dependency while this shared client is developed.
+## What this package provides
+
+The package entrypoint is `index.mjs`. `Supervisor` embeds the process manager
+in the Node application. `SupervisorClient` connects over the authenticated
+JSONL protocol and exposes process control, run/activity/attempt reporting,
+FlowRun coordination, approvals, and event subscriptions. In service mode, the
+service owns the managed processes.
+
+The Rust and Python packages also provide an embedded `Supervisor` API for
+applications that manage local process trees in-process. They additionally
+provide service clients. The bindings share process and coordination concepts;
+their high-level APIs differ by language and by whether the service is remote.
 
 Connect with an explicit role. A `view` client can request metadata snapshots
 and coordinator subscriptions, but cannot attach to process output. A successful
@@ -41,14 +69,63 @@ Supervisor process ID, never an OS PID. Output capabilities remain valid for
 that process while the service is running and can replay its retained history;
 the service clears them on restart. JSONL frames are limited to 1 MiB.
 
-## Embedded and service modes
+## Embedded mode
 
-Use the Rust or Python embedded `Supervisor` API when the host owns and runs
-managed children in its own process. Use `SupervisorServiceClient` when the
-service process must own them independently of a desktop, runtime, or framework
-client. The service client connects only to the configured Unix socket; it does
-not fall back to native spawning if the socket is unavailable. A route that
-requires supervision must surface that connection error to its caller.
+The embedded Node API owns children in the Node process, using the same Rust
+supervision and policy implementation as the Rust and Python APIs. Build the
+native addon from a checkout with Rust installed:
+
+```sh
+npm run build:native
+```
+
+Packages created with `npm pack` or `npm publish` build and include the native
+binary through `prepack`. That build targets the machine running the command;
+the npm release workflow still needs per-platform native packages before this
+API is published for cross-platform installation.
+
+```js
+import {
+  AgentRunPolicy,
+  Command,
+  Policy,
+  Supervisor
+} from '@rooagi/agent-supervisor'
+
+const supervisor = new Supervisor()
+const run = supervisor.startAgentRun(new AgentRunPolicy({
+  timeoutMs: 180_000,
+  shutdownGraceMs: 3_000
+}))
+
+try {
+  const result = await run.run(async (scope, { signal }) => {
+    signal.throwIfAborted()
+    return scope.runCommand(
+      new Command(['/usr/bin/tool', '--version']),
+      { policy: new Policy({ network: 'disabled' }) }
+    )
+  })
+  console.log(result.stdout.toString())
+} finally {
+  await supervisor.shutdownAll()
+}
+```
+
+`AgentRun.run()` applies its deadline and optional `AbortSignal`, then cleans up
+run-owned processes before it settles. Use `run.start()` for an interactive
+child or `Supervisor.startBackground()` for a manager-owned job that should
+continue between agent runs. Read output and lifecycle events with
+`Supervisor.stream()` or `AgentRun.stream()`. The operation receives an
+`AbortSignal` and should pass it into its framework call; JavaScript cannot
+forcibly interrupt arbitrary in-process work. One-shot `runCommand()` also
+accepts an `AbortSignal` or a `CancellationToken`.
+
+Use `SupervisorClient` when the service should own processes independently of a
+desktop, runtime, or framework client. It connects only to the configured Unix
+socket and does not fall back to native spawning if the socket is unavailable.
+A route that requires service supervision must surface that connection error to
+its caller.
 
 The current JSONL auth handshake has no protocol-version negotiation. Clients
 and service must use compatible releases; incompatible replies and unavailable
@@ -132,3 +209,99 @@ control role cannot revoke itself or another control credential. Restarting
 the service clears in-memory revocations; issue replacement role files when
 rotating credentials. Token values are never logged or returned by the
 revocation API.
+
+## Framework adapters
+
+The optional framework entry points connect an agent invocation to the same
+Supervisor run, activity, and attempt records. The framework still owns agent
+planning, tool results, conversation state, and checkpoints. Importing the
+base package does not load any agent SDK; install only the optional SDKs your
+application uses:
+
+```sh
+npm install @rooagi/agent-supervisor
+# Install the SDK peer dependencies used by your application, for example:
+npm install @openai/agents langchain @langchain/langgraph ai @google/adk
+```
+
+| Python integration | Node adapter | Node entry point |
+| --- | --- | --- |
+| OpenAI Agents SDK | Supported | `@rooagi/agent-supervisor/frameworks/openai` |
+| LangGraph | Supported | `@rooagi/agent-supervisor/frameworks/langgraph` |
+| Google ADK | Supported | `@rooagi/agent-supervisor/frameworks/google-adk` |
+| LangChain Runnable agents | Supported | `@rooagi/agent-supervisor/frameworks/langchain` |
+| PydanticAI | No supported Node SDK adapter | — |
+| Microsoft Agent Framework | No supported Node SDK adapter | — |
+| FastMCP and MCP stdio helpers | Python-only integrations here; no matching framework adapter in this Node package | — |
+
+Adapters use cooperative cancellation. The caller's `AbortSignal` is passed to
+the SDK, and a cancellation requested through the Supervisor service is
+forwarded through an invocation signal where that SDK supports it. The
+Supervisor records cancellation after the invocation or stream ends; it cannot
+forcibly stop arbitrary JavaScript executing in-process. LangGraph thread IDs
+and checkpoints, Google ADK sessions, and other framework-owned state remain
+with their respective frameworks. Child processes are supervised only when a
+tool explicitly starts them with the per-invocation `execute` option's
+`startProcess` helper. The helper requires an explicit policy and binds the
+child to the current attempt and host-supplied context. Failed or cancelled
+invocations stop those children; after success, their handles remain under
+caller/Supervisor ownership. Adapters do not intercept global process APIs or
+unrelated subprocesses.
+
+### OpenAI Agents SDK
+
+```js
+import { createOpenAIAgentsAdapter } from '@rooagi/agent-supervisor/frameworks/openai'
+
+const managed = createOpenAIAgentsAdapter({ client }).wrap(agent)
+const result = await managed.run(input, { context, session })
+const streamed = await managed.runStream(input, { context, session })
+for await (const event of streamed) consume(event)
+```
+
+`@openai/agents` is loaded on first use. The adapter waits for streamed events
+and the SDK's completion result before reporting the run as finished.
+
+### LangChain.js and LangGraph.js
+
+```js
+import { createLangChainAdapter } from '@rooagi/agent-supervisor/frameworks/langchain'
+import { createLangGraphAdapter } from '@rooagi/agent-supervisor/frameworks/langgraph'
+
+const managedAgent = createLangChainAdapter({ client }).wrap(agent)
+const answer = await managedAgent.invoke(input, { configurable: { thread_id: 'thread-1' } })
+
+const managedGraph = createLangGraphAdapter({ client }).wrap(compiledGraph)
+const state = await managedGraph.invoke(input, { configurable: { thread_id: 'thread-1' } })
+const events = await managedGraph.stream(input, { configurable: { thread_id: 'thread-1' } })
+for await (const event of events) consume(event)
+```
+
+Runnable callbacks and configuration pass through. LangGraph thread IDs,
+checkpointers, and resume commands remain under LangGraph's ownership.
+
+### Vercel AI SDK and Google ADK
+
+```js
+import { createVercelAIAdapter } from '@rooagi/agent-supervisor/frameworks/vercel-ai'
+import { createGoogleADKAdapter } from '@rooagi/agent-supervisor/frameworks/google-adk'
+
+const managedAgent = createVercelAIAdapter({ client }).wrap(agent)
+const response = await managedAgent.generate({ prompt: 'Summarize this report.' })
+const streamed = await managedAgent.stream({ prompt: 'Summarize this report.' })
+for await (const part of streamed.textStream) process.stdout.write(part)
+
+const managedRunner = createGoogleADKAdapter({ client }).wrap(runner)
+const events = await managedRunner.runAsync(
+  { userId, sessionId, newMessage },
+  { signal: abortController.signal },
+)
+for await (const event of events) consume(event)
+```
+
+For streaming Vercel results, the adapter preserves the native result object and
+keeps the attempt active until the selected stream is consumed. Google ADK
+session identity and event payloads pass through unchanged.
+
+For a provider-free example that connects to the service and wraps a fixture
+invocation, see [`examples/framework-smoke.mjs`](examples/framework-smoke.mjs).
