@@ -137,56 +137,63 @@ async fn appcontainer_enforces_read_and_write_grants() {
 
 #[tokio::test]
 async fn filesystem_sandbox_preserves_host_network_loopback() {
-    let directory = tempfile::tempdir().expect("temporary working directory");
-    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("loopback listener");
-    let port = listener.local_addr().expect("listener address").port();
-    listener
-        .set_nonblocking(true)
-        .expect("nonblocking listener");
-    let receiver = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            match listener.accept() {
-                Ok((mut stream, _)) => {
-                    stream
-                        .set_read_timeout(Some(Duration::from_secs(3)))
-                        .expect("request read timeout");
-                    let mut request = Vec::new();
-                    let mut chunk = [0u8; 512];
-                    while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-                        let count = match stream.read(&mut chunk) {
-                            Ok(0) => return false,
-                            Ok(count) => count,
-                            Err(_) => return false,
-                        };
-                        request.extend_from_slice(&chunk[..count]);
-                    }
-                    stream
-                        .write_all(
-                            b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nrooagi",
-                        )
-                        .expect("network response");
-                    return true;
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    if Instant::now() >= deadline {
-                        return false;
-                    }
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(_) => return false,
-            }
-        }
-    });
-
     let windir = std::env::var_os("WINDIR").expect("WINDIR");
     let curl = PathBuf::from(windir).join("System32").join("curl.exe");
-    let output = execute(
-        &request_for(
-            curl,
+    let mut failures = Vec::new();
+    // The Windows loopback exemption is installed through the OS networking
+    // service. Hosted runners can briefly abort the first AppContainer TCP
+    // connection while that exemption propagates, so retry with a fresh
+    // listener and AppContainer. A persistent denial still fails the test.
+    for attempt in 1..=3 {
+        let directory = tempfile::tempdir().expect("temporary working directory");
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("loopback listener");
+        let port = listener.local_addr().expect("listener address").port();
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener");
+        let receiver = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(3)))
+                            .expect("request read timeout");
+                        let mut request = Vec::new();
+                        let mut chunk = [0u8; 512];
+                        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                            let count = match stream.read(&mut chunk) {
+                                Ok(0) => return false,
+                                Ok(count) => count,
+                                Err(_) => return false,
+                            };
+                            request.extend_from_slice(&chunk[..count]);
+                        }
+                        stream
+                            .write_all(
+                                b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nrooagi",
+                            )
+                            .expect("network response");
+                        return true;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if Instant::now() >= deadline {
+                            return false;
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => return false,
+                }
+            }
+        });
+
+        let mut request = request_for(
+            curl.clone(),
             vec![
                 "--silent".into(),
                 "--show-error".into(),
+                "--noproxy".into(),
+                "*".into(),
                 "--connect-timeout".into(),
                 "3".into(),
                 format!("http://127.0.0.1:{port}"),
@@ -196,19 +203,28 @@ async fn filesystem_sandbox_preserves_host_network_loopback() {
                 access: vec![FilesystemAccess::Read],
             }]),
             Some(directory.path().to_path_buf()),
-        ),
-        b"",
-    )
-    .await
-    .expect("network execution");
-    let received = receiver.join().expect("network receiver");
-    assert!(
-        output.success,
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
+        );
+        request.policy.limits.timeout_ms = 10_000;
+        let output = execute(&request, b"").await;
+        let received = receiver.join().expect("network receiver");
+        match output {
+            Ok(output) if output.success && received && output.stdout == b"rooagi" => return,
+            Ok(output) => failures.push(format!(
+                "attempt {attempt}: success={}, received_request={received}, stdout={:?}, stderr={}",
+                output.success,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )),
+            Err(error) => failures.push(format!(
+                "attempt {attempt}: execution failed: {error} (received_request={received})"
+            )),
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    panic!(
+        "filesystem-isolated AppContainer could not reach host loopback:\n{}",
+        failures.join("\n")
     );
-    assert!(received);
-    assert_eq!(output.stdout, b"rooagi");
 }
 
 #[tokio::test]
