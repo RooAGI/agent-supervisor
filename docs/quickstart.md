@@ -5,297 +5,298 @@ hide:
 
 # Quickstart
 
-Keep the agent framework you already use. This walkthrough adds Agent
-Supervisor one layer at a time, from your application down to the tool:
+Agent Supervisor provides a supervision layer for agent applications. It
+manages agent run lifecycles and the tools they launch, with execution policies,
+activity tracking, cancellation, and cleanup.
 
-| Layer | What you add |
-| --- | --- |
-| **Application** | Create one `Supervisor` and shut it down at exit. |
-| **Supervisor** | Pass it to the framework call; it owns the run and its tool processes. |
-| **Agent** | Use the supervised `Runner` so the agent run has a deadline and cleanup. |
-| **Tool** | Use `run_tool_command` where a tool starts a local command. |
+## 1. Install
 
-The framework still runs the agent and makes model requests. Cancellation of
-in-process agent code and model calls is cooperative; Agent Supervisor manages
-the separate local tool processes it starts.
+=== "Rust"
 
-## Install
+    ```sh
+    cargo add agent-supervisor
+    cargo add tokio --features macros,rt-multi-thread
+    ```
 
-The framework adapter is included in the repository source. Install it with the
-OpenAI Agents SDK extra:
+    Use your application's Tokio runtime if it already has one.
 
-```bash
-git clone https://github.com/RooAGI/agent-supervisor.git
-cd agent-supervisor/python
-python -m pip install -e '.[openai]'
-```
+=== "Python"
 
-Set `OPENAI_API_KEY` before running the example. Set `PROJECT_WORKSPACE` to the
-project directory whose tests the tool should run; it defaults to the current
-directory.
+    ```sh
+    python -m pip install agent-supervisor
+    ```
 
-## 1. Application: create the supervisor
+=== "Node.js"
 
-Create one `Supervisor` in your application. It lives in your process and is
-not a daemon.
+    The npm package is not published yet. From an Agent Supervisor checkout,
+    install it with this one command:
 
-```python
-from agent_supervisor import Supervisor
+    ```sh
+    npm install /path/to/agent-supervisor/clients/node
+    ```
 
-supervisor = Supervisor()
-```
+    The source install builds the native addon and requires Rust and your
+    platform's native build tools. See the [Node package guide](https://github.com/RooAGI/agent-supervisor/blob/main/clients/node/README.md)
+    for service mode and framework adapter setup.
 
-## 2. Supervisor: pass it to the agent run
+## 2. Supervise an agent run
 
-The supervisor owns each agent run and the tool processes started during it.
-Pass it to the framework adapter with `supervisor=supervisor` (next step).
+Wrap your framework call in an `AgentRun` so Agent Supervisor can apply a
+deadline and clean up processes the run owns. The framework still runs the
+agent. Rust wraps the framework future directly; Python and Node examples use
+the OpenAI Agents SDK.
 
-## 3. Agent: use the supervised `Runner`
+=== "Rust"
 
-If your app already imports `Runner` from the OpenAI SDK, make this one-line
-change:
+    Pass your framework's async call to `AgentRun::run()`. Replace
+    `your_framework_call()` with the future your framework returns:
 
-```diff
-- from agents import Runner
-+ from agent_supervisor.openai import Runner
-```
+    ```rust
+    use agent_supervisor::{AgentRunPolicy, Supervisor};
+    use std::time::Duration;
 
-```python
-result = await Runner.run(agent, prompt, supervisor=supervisor)
-```
+    let supervisor = Supervisor::new();
+    let agent_run = supervisor.start_agent_run(AgentRunPolicy::default());
+    let result = agent_run.run(your_framework_call()).await?;
+    agent_run.cancel().await; // Finish the run and clean up its owned processes.
+    supervisor.shutdown_all(Duration::from_secs(5)).await?;
+    ```
 
-The supervised `Runner` gives the agent run an overall deadline. When the run
-ends, Agent Supervisor cleans up the tool processes it started. Keep `Agent`
-and `function_tool` from `agents`.
+=== "Python"
 
-## 4. Tool: run commands through Agent Supervisor
+    Install the adapter and SDK:
 
-In the tool function, route the approved command through `run_tool_command`.
-It applies limits to the local command and returns its result:
+    ```sh
+    python -m pip install 'agent-supervisor[openai]'
+    ```
 
-```python
-result = await run_tool_command(Command(argv=argv))
-```
+    Set `OPENAI_API_KEY`, then pass your agent to the supervised `Runner`:
 
-## Complete example
+    ```python
+    import asyncio
+    from agents import Agent
+    from agent_supervisor import Supervisor
+    from agent_supervisor.openai import Runner
 
-The complete example adds a working directory, limits, an explicit network
-policy, and shutdown:
-
-```python
-import asyncio
-import os
-import sys
-
-from agents import Agent, function_tool
-from agent_supervisor import Command, Policy, Supervisor, run as run_tool_command
-from agent_supervisor.openai import Runner  # Replaces `from agents import Runner`.
-
-WORKSPACE = os.path.abspath(os.environ.get("PROJECT_WORKSPACE", "."))
-
-
-@function_tool
-async def run_project_tests() -> str:
-    """Run the project's tests and return a bounded summary."""
-    result = await run_tool_command(
-        Command(
-            argv=[sys.executable, "-m", "pytest", "-q"],
-            cwd=WORKSPACE,
-            timeout=120,
-            max_stdout_bytes=8192,
-            max_stderr_bytes=4096,
-        ),
-        policy=Policy(network="disabled"),
-    )
-    output = (result.stdout + b"\n" + result.stderr).decode(
-        "utf-8", errors="replace"
-    )
-    return f"{result.termination}; exit={result.exit_code}\n{output}"
-
-
-async def main() -> None:
     agent = Agent(
-        name="Project helper",
-        instructions="Run the project tests when asked and summarize the result.",
-        tools=[run_project_tests],
+        name="Assistant",
+        instructions="Answer the user's question clearly.",
     )
-    supervisor = Supervisor()
-    result = await Runner.run(
-        agent, "Run the project tests", supervisor=supervisor
+
+    async def main():
+        supervisor = Supervisor()
+        try:
+            result = await Runner.run(
+                agent, "What does Agent Supervisor do?", supervisor=supervisor
+            )
+            print(result.final_output)
+        finally:
+            await supervisor.shutdown_all()
+
+    asyncio.run(main())
+    ```
+
+=== "Node.js"
+
+    Install `@openai/agents` alongside the Node package and set
+    `OPENAI_API_KEY`. This uses the embedded `Supervisor`; no service setup is
+    needed.
+
+    ```js
+    import { AgentRunPolicy, Supervisor } from '@rooagi/agent-supervisor'
+    import { Agent, run } from '@openai/agents'
+
+    const agent = new Agent({
+      name: 'Assistant',
+      instructions: 'Answer the user’s question clearly.',
+    })
+
+    const supervisor = new Supervisor()
+    try {
+      const agentRun = supervisor.startAgentRun(new AgentRunPolicy())
+      const result = await agentRun.run(
+        (_scope, { signal }) => run(agent, 'What does Agent Supervisor do?', { signal })
+      )
+      console.log(result.finalOutput)
+    } finally {
+      await supervisor.shutdownAll()
+    }
+    ```
+
+For service-backed Node framework adapters that register run, activity, and
+attempt records, see the [Node package guide](https://github.com/RooAGI/agent-supervisor/blob/main/clients/node/README.md).
+
+## 3. Run one supervised command
+
+Start with a single command. `run()` launches the child directly, captures
+bounded output, and returns its result.
+
+=== "Rust"
+
+    This small program starts itself once as a child, so it works without
+    assuming a particular system command is installed:
+
+    ```rust
+    use agent_supervisor::{run, Command, Policy};
+
+    #[tokio::main]
+    async fn main() -> Result<(), Box<dyn std::error::Error>> {
+        if std::env::args().any(|arg| arg == "--child") {
+            println!("hello from a supervised process");
+            return Ok(());
+        }
+
+        let executable = std::env::current_exe()?;
+        let command = Command {
+            argv: vec![executable.display().to_string(), "--child".into()],
+            cwd: None,
+        };
+        let result = run(&command, &Policy::default()).await?;
+        print!("{}", String::from_utf8_lossy(&result.stdout));
+        Ok(())
+    }
+    ```
+
+=== "Python"
+
+    ```python
+    import asyncio
+    import sys
+
+    from agent_supervisor import Command, Policy, run
+
+    async def main():
+        result = await run(
+            Command([sys.executable, "-c", "print('hello from a supervised process')"]),
+            policy=Policy(),
+        )
+        print(result.stdout.decode("utf-8", errors="replace"), end="")
+
+    asyncio.run(main())
+    ```
+
+=== "Node.js"
+
+    ```js
+    import { Command, Policy, run } from '@rooagi/agent-supervisor'
+
+    const result = await run(
+      new Command([process.execPath, '-e', "console.log('hello from a supervised process')"]),
+      { policy: new Policy() }
     )
-    print(result.final_output)
-    # Stop any remaining runs and jobs before the application exits.
-    await supervisor.shutdown_all()
+    process.stdout.write(result.stdout)
+    ```
 
+The default policy allows host networking and does not restrict filesystem
+access. Set a narrower [`Policy`](security-model.md) for tools that need fewer
+permissions. Enforcement depends on the operating system.
 
-asyncio.run(main())
-```
+## One-shot and background tool runs
 
-The example gives the agent one test-running tool. Agent Supervisor sets the
-agent-run deadline to five minutes by default; each tool command has its own
-120-second timeout and output limits. `Policy(network="disabled")` requests
-network denial where the operating system supports it. Configure filesystem
-access explicitly if the command needs narrower access; defaults do not create
-a complete sandbox.
+Use a one-shot command when the tool waits for a result. Use a background job
+when the process should continue after the tool call or agent run ends. Each
+language has both APIs:
 
-## Tool runs: one-shot and background
+=== "Rust"
 
-A tool can start a local command in two ways. Choose by how long the process
-should live.
+    **One-shot within an agent run:**
 
-### One-shot tool run
+    ```rust
+    // Inside a tool called during `agent_run`:
+    let result = agent_run.run_command(&command, &policy, &[]).await?;
+    println!("{}", String::from_utf8_lossy(&result.stdout));
+    ```
 
-Use `run_tool_command` inside a tool function for a command that finishes
-while the agent waits. It applies the command's timeout and output limits, then
-returns a bounded result. The process belongs to the active agent run, so it is
-stopped if the run ends or is cancelled first.
+    **Background job:**
 
-```python
-import shutil
+    ```rust
+    use std::time::Duration;
 
-from agent_supervisor import Command, Policy, run as run_tool_command
+    let job_id = supervisor.start_background(&command, &policy)?;
+    // Later, stop this job and collect its result.
+    supervisor.shutdown_process(job_id, Duration::from_secs(2)).await?;
+    let result = supervisor.wait_process(job_id).await?.unwrap();
+    ```
 
-result = await run_tool_command(
-    Command(
-        argv=[shutil.which("git"), "status", "--short"],  # Must be an absolute path.
-        cwd=WORKSPACE,
-        timeout=30,
-        max_stdout_bytes=4096,
-    ),
-    policy=Policy(network="disabled"),
-)
-print(result.termination, result.exit_code, result.stdout.decode())
-```
+    See [Rust persistent processes](rust-api.md#persistent-processes).
 
-### Background tool run
+=== "Python"
 
-Use `start_background` for a process that should keep running after the tool
-call returns, such as a dev server or a long build. The `Supervisor` owns it,
-not the agent run, so it continues between agent runs. You refer to it by its
-`SupervisorProcessId`:
+    **One-shot within an agent tool:**
 
-```python
-job_id = await supervisor.start_background(
-    Command(
-        argv=[shutil.which("npm"), "run", "dev"],
-        cwd=WORKSPACE,
-        inherit_env=["PATH", "HOME"],  # The child's environment starts empty.
-    ),
-    policy=Policy(network="host"),
-)
+    ```python
+    import sys
 
-supervisor.process_status(job_id)       # "running", "completed", "failed", or None
-await supervisor.write_process_stdin(job_id, b"reload\n")   # optional input
+    from agent_supervisor import Command, Policy, run as run_tool_command
 
-# Later, from any tool call or a new agent run on the same Supervisor:
-await supervisor.shutdown_process(job_id, grace=2.0)   # stop just this job
-result = await supervisor.wait_process(job_id)         # final RunResult
-print(result.termination, result.exit_code)
-```
+    result = await run_tool_command(
+        Command(argv=[sys.executable, "-c", "print('done')"]),
+        policy=Policy(),
+    )
+    print(result.termination, result.exit_code, result.stdout.decode())
+    ```
 
-`Command.timeout` does not end a background job; it runs until it exits or you
-stop it. It can write any amount of output, and its result keeps the newest
-bytes up to the command's byte limits. `shutdown_all()` stops any jobs still
-running when the application exits. See the
-[Python API](python-api.md#supervisor-manager) for every job method.
+    **Background job:**
 
-### Watch it live
+    ```python
+    import sys
 
-`Supervisor.stream()` watches work without affecting it. Use it for one job, or
-for a whole agent run, which also shows the agent's own events:
+    from agent_supervisor import Command, Policy
 
-```python
-async for event in supervisor.stream(process=job_id):
-    if event.kind == "stdout":
-        print(event.data.decode("utf-8", errors="replace"), end="")
+    job_id = await supervisor.start_background(
+        Command([sys.executable, "-m", "http.server"], cwd="."),
+        policy=Policy(),
+    )
+    # Later, stop this job and collect its result.
+    await supervisor.shutdown_process(job_id, grace=2.0)
+    result = await supervisor.wait_process(job_id)
+    print(result.termination, result.exit_code)
+    ```
 
-result = await Runner.run_streamed(agent, prompt, supervisor=supervisor)
-async for event in supervisor.stream(run=result.agent_run):
-    print(event.kind)   # agent, stdout, exited, run_ended, ...
-```
+    `shutdown_all()` stops remaining jobs when the application exits. See the
+    [Python API](python-api.md#supervisor-manager) for process controls.
 
-See [Stream output](python-api.md#stream-output).
+=== "Node.js"
 
-## Start the run yourself
+    **One-shot within an agent run:**
 
-The `Runner` adapter calls `start_agent_run()` for you. For a framework without
-an adapter, or when you need the run object, create it directly. Run the
-framework call through it, and the run applies the deadline and cleans up tool
-processes when the call ends or is cancelled:
+    ```js
+    import { Command, Policy } from '@rooagi/agent-supervisor'
 
-```python
-from agent_supervisor import AgentRunPolicy
+    const result = await agentRun.run(async (scope) =>
+      scope.runCommand(
+        new Command([process.execPath, '-e', "console.log('done')"]),
+        { policy: new Policy() },
+      )
+    )
+    console.log(result.stdout.toString())
+    ```
 
-run = supervisor.start_agent_run(AgentRunPolicy(timeout=180, shutdown_grace=3))
+    **Background job:**
 
-async def run_agent():
-    # Your existing framework call. Tools started with `run_tool_command`
-    # while it runs join this run.
-    return await agent.run("Summarize the project")
+    ```js
+    import { Command, Policy } from '@rooagi/agent-supervisor'
 
-async with run:
-    result = await run.run(run_agent())
-```
+    const jobId = await supervisor.startBackground(
+      new Command([process.execPath, '-e', 'setInterval(() => {}, 1000)']),
+      { policy: new Policy() },
+    )
+    // Later, stop this job and collect its result.
+    await supervisor.shutdownProcess(jobId, { graceMs: 2_000 })
+    const result = await supervisor.waitProcess(jobId)
+    console.log(result?.termination, result?.exitCode)
+    ```
 
-## Resume after a pause
+    `shutdownAll()` stops remaining jobs when the application exits. See the
+    [Node package guide](https://github.com/RooAGI/agent-supervisor/blob/main/clients/node/README.md)
+    for process controls.
 
-Agent Supervisor does not store or restore framework state. To resume:
+For streaming output, manually creating an agent run, or saving and resuming
+work, see the language references:
 
-1. Save the framework's own session or checkpoint in your application store.
-2. If a background job should continue, start it with
-   `supervisor.start_background(command)` and save `process_id.token` beside
-   the checkpoint.
-3. When the workflow resumes, load the checkpoint and start a **new**
-   `AgentRun` with `supervisor.start_agent_run()`.
-4. Look the job up with `SupervisorProcessId.from_token(token)` and
-   `supervisor.process_status(process_id)`, using the same live `Supervisor`.
-
-```python
-import json
-import sys
-
-from agent_supervisor import (
-    AgentRunPolicy, Command, Supervisor, SupervisorProcessId,
-)
-
-supervisor = Supervisor()  # Keep this one alive across both invocations.
-
-
-async def first_invocation():
-    run = supervisor.start_agent_run(AgentRunPolicy())
-    async with run:
-        checkpoint = await run.run(agent_step_one())  # framework's own state
-        job = await supervisor.start_background(
-            Command([sys.executable, "-u", "-c", "import time; time.sleep(60)"])
-        )
-        await save_to_application_store(json.dumps({
-            "framework_checkpoint": checkpoint,
-            "background_process": job.token,
-        }))
-    # The run has ended and its tools are stopped. The job keeps running.
-
-
-async def second_invocation():
-    record = json.loads(await load_from_application_store())
-    job_id = SupervisorProcessId.from_token(record["background_process"])
-
-    run = supervisor.start_agent_run(AgentRunPolicy())  # a new run
-    async with run:
-        status = supervisor.process_status(job_id)
-        if status is None:
-            # Job is gone (for example, the app restarted). Recover from the
-            # checkpoint; do not replay the old command.
-            return record["framework_checkpoint"]
-        return await run.run(
-            agent_step_two(record["framework_checkpoint"], status)
-        )
-```
-
-If lookup returns `None`, the job is gone, for example after an application
-restart. Recover from the checkpoint; do not replay the old command, because it
-may already have had side effects. The complete resume example is in the
-[Python API](python-api.md#save-and-resume-background-jobs) and the
-[Rust API](rust-api.md#save-and-resume-background-jobs).
+- [Rust API](rust-api.md)
+- [Python API](python-api.md)
+- [Node package guide](https://github.com/RooAGI/agent-supervisor/blob/main/clients/node/README.md)
 
 ## Next steps
 
@@ -304,6 +305,7 @@ may already have had side effects. The complete resume example is in the
 - [Python API](python-api.md): Python arguments, return values, streaming, and
   persistent processes.
 - [Rust API](rust-api.md): Rust types, methods, and examples.
+- [Node package guide](https://github.com/RooAGI/agent-supervisor/blob/main/clients/node/README.md): embedded Node API, service mode, and framework adapters.
 - [Use with agent SDKs](api-boundaries.md): examples for OpenAI Agents SDK,
   Microsoft Agent Framework, LangGraph, PydanticAI, and Google ADK.
 - [MCP servers](mcp.md): supervise an existing Rust or Python stdio MCP server.

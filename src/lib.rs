@@ -7,11 +7,14 @@
 use std::path::PathBuf;
 
 mod agent_run;
+pub(crate) mod coordinator;
+pub(crate) mod coordinator_store;
 mod environment;
 mod error;
 mod event_log;
 mod events;
 mod filesystem;
+pub(crate) mod flowboard_mcp;
 mod group;
 pub mod mcp;
 mod network;
@@ -21,11 +24,19 @@ mod probes;
 mod process_control;
 mod pty;
 mod runner;
+#[cfg(unix)]
+pub mod service;
+#[cfg(unix)]
+pub mod service_client;
 mod supervisor;
+pub mod tui;
 #[cfg(feature = "wasm")]
 mod wasm;
 #[cfg(windows)]
 mod windows_filesystem;
+pub(crate) mod workflow;
+#[cfg(unix)]
+pub(crate) mod workflow_dispatcher;
 
 pub use agent_run::{AgentRun, AgentRunPolicy};
 pub use environment::{apply_environment_policy, validate_environment_policy, EnvironmentPolicy};
@@ -49,8 +60,8 @@ pub use pty::{PtyDimensions, PtySession};
 pub use runner::{execute_with_runner, NativeRunner, ProcessRunner};
 pub use supervisor::{
     execute, execute_with_cancellation, run, spawn, spawn_with_supervisor, wait_all, wait_any,
-    ExecutionOutput, ManagedProcessInfo, ManagedProcessResult, ManagedProcessStatus,
-    ProcessStopResult, SupervisedChild, Supervisor, SupervisorProcessId,
+    ExecutionOutput, ManagedProcessInfo, ManagedProcessMetadata, ManagedProcessResult,
+    ManagedProcessStatus, ProcessStopResult, SupervisedChild, Supervisor, SupervisorProcessId,
 };
 
 /// High-level command description shared with the Python API.

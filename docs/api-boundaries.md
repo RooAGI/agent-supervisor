@@ -3,7 +3,47 @@ hide:
   - toc
 ---
 
-# Connect Agent Supervisor to an agent SDK
+# Connect Agent Supervisor to agent SDKs
+
+Agent Supervisor has two integration modes. The Node.js client connects to an
+independent service that owns explicitly launched subprocesses. The Python
+bindings can embed a `Supervisor` in the application process and wrap an
+`AgentRun`. Choose one based on who should own local processes and whether that
+owner needs to outlive a framework client.
+
+## Node.js service client and framework adapters
+
+The Node package connects to the independent service over an authenticated
+Unix socket. Its adapters register each framework invocation as a Supervisor
+run, activity, and attempt; they do not move the agent loop or model calls into
+the service. Frameworks remain responsible for planning, conversation state,
+and checkpoints. In-process cancellation is cooperative.
+
+| Framework | Node entry point | Invocation surface |
+| --- | --- | --- |
+| OpenAI Agents SDK | `@rooagi/agent-supervisor/frameworks/openai` | `run` and `runStream` |
+| LangChain.js | `@rooagi/agent-supervisor/frameworks/langchain` | Runnable `invoke` and `stream` |
+| LangGraph.js | `@rooagi/agent-supervisor/frameworks/langgraph` | Compiled graph `invoke` and `stream` |
+| Vercel AI SDK | `@rooagi/agent-supervisor/frameworks/vercel-ai` | Agent `generate` and `stream` |
+| Google ADK | `@rooagi/agent-supervisor/frameworks/google-adk` | Runner `runAsync` event stream |
+
+Each framework SDK is an optional peer dependency. A tool subprocess is
+Supervisor-owned only when the application explicitly starts it with the
+per-invocation `execute` hook's `startProcess` helper and an explicit policy.
+This associates the process with the trusted run/activity/attempt context;
+there is no global subprocess interception. Failed, cancelled, or unknown runs
+stop children started through that helper. Successful-run children remain
+under caller/Supervisor ownership.
+
+The npm package is not published yet. From a repository checkout, install the
+local package with `npm install /path/to/agent-supervisor/clients/node` and
+install the optional SDKs your application uses. The
+[Node package guide](https://github.com/RooAGI/agent-supervisor/blob/main/clients/node/README.md)
+has setup steps, examples, credential scopes, streaming behavior, and the
+Python-to-Node support matrix. See the [Quickstart](quickstart.md#nodejs-package)
+for the local Node package installation command.
+
+## Python embedded AgentRun adapters
 
 Your application creates one top-level `Supervisor`. It owns each `AgentRun`
 and the local processes started by that run. The agent framework still runs
@@ -55,7 +95,7 @@ period by default. Override them per call with
 
 ## Install
 
-The framework run adapters are in the current 0.3.0 repository source. Install
+The framework run adapters are in the current 0.3.2 repository source. Install
 the adapter from a checkout as shown in its section below. The table lists
 each framework's SDK dependency:
 

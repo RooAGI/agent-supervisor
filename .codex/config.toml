@@ -1,0 +1,19 @@
+[mcp_servers.membrick]
+args = ["--codex-serve"]
+command = "/Users/louis/.local/bin/membrick"
+cwd = "/Users/louis/sources/rooagi-sandbox"
+enabled = true
+startup_timeout_sec = 120
+
+[mcp_servers.membrick.tools.update_membrick]
+approval_mode = "prompt"
+
+[mcp_servers.membrick.tools.search]
+approval_mode = "approve"
+
+[mcp_servers.flowboard-mcp]
+command = "/Users/louis/sources/flowboard/target/release/flowboard-mcp"
+args = ["--project-root", "/Users/louis/sources/rooagi-sandbox", "--workspace-root", "/Users/louis/sources/rooagi-sandbox"]
+cwd = "/Users/louis/sources/rooagi-sandbox"
+enabled = true
+startup_timeout_sec = 30

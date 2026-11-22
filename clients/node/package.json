@@ -1,0 +1,85 @@
+{
+  "name": "@rooagi/agent-supervisor",
+  "version": "0.3.2",
+  "description": "Embedded and service-based process supervision for Node.js agent applications.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RooAGI/agent-supervisor.git",
+    "directory": "clients/node"
+  },
+  "files": [
+    "LICENSE",
+    "build-native.mjs",
+    "embedded.mjs",
+    "native.mjs",
+    "native/agent_supervisor_node_native.node",
+    "index.d.ts",
+    "index.mjs",
+    "README.md",
+    "frameworks/README.md",
+    "frameworks/core.mjs",
+    "frameworks/core.d.mts",
+    "frameworks/langchain.mjs",
+    "frameworks/langchain.d.mts",
+    "frameworks/langgraph.mjs",
+    "frameworks/langgraph.d.ts",
+    "frameworks/openai.mjs",
+    "frameworks/openai.d.mts",
+    "frameworks/vercel-ai.mjs",
+    "frameworks/vercel-ai.d.ts",
+    "frameworks/google-adk.mjs",
+    "frameworks/google-adk.d.ts",
+    "examples"
+  ],
+  "peerDependencies": {
+    "@google/adk": "*",
+    "@langchain/langgraph": "*",
+    "@openai/agents": "*",
+    "ai": "*",
+    "langchain": "*"
+  },
+  "peerDependenciesMeta": {
+    "@google/adk": { "optional": true },
+    "@langchain/langgraph": { "optional": true },
+    "@openai/agents": { "optional": true },
+    "ai": { "optional": true },
+    "langchain": { "optional": true }
+  },
+  "type": "module",
+  "scripts": {
+    "build:native": "node ./build-native.mjs",
+    "prepare": "npm run build:native",
+    "prepack": "npm run build:native"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.mjs"
+    },
+    "./frameworks/core": {
+      "types": "./frameworks/core.d.mts",
+      "import": "./frameworks/core.mjs"
+    },
+    "./frameworks/openai": {
+      "types": "./frameworks/openai.d.mts",
+      "import": "./frameworks/openai.mjs"
+    },
+    "./frameworks/langchain": {
+      "types": "./frameworks/langchain.d.mts",
+      "import": "./frameworks/langchain.mjs"
+    },
+    "./frameworks/langgraph": {
+      "types": "./frameworks/langgraph.d.ts",
+      "import": "./frameworks/langgraph.mjs"
+    },
+    "./frameworks/vercel-ai": {
+      "types": "./frameworks/vercel-ai.d.ts",
+      "import": "./frameworks/vercel-ai.mjs"
+    },
+    "./frameworks/google-adk": {
+      "types": "./frameworks/google-adk.d.ts",
+      "import": "./frameworks/google-adk.mjs"
+    }
+  }
+}

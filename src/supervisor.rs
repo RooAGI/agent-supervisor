@@ -123,6 +123,7 @@ pub struct Supervisor {
     log: Arc<EventLog>,
     /// Set on the per-run view, so its processes are attributed to that run.
     run_id: Option<u64>,
+    tui_sessions: Arc<Mutex<BTreeMap<Uuid, CancellationToken>>>,
 }
 
 /// Stable identity for a process registered with one [`Supervisor`]. The ID
@@ -211,6 +212,189 @@ pub struct ManagedProcessInfo {
     pub parent_process_id: Option<u32>,
     pub start_time_ticks: Option<u64>,
     pub executable: Option<std::path::PathBuf>,
+    /// Optional host-supplied framework label, such as `OpenAI Agents SDK`.
+    pub framework: Option<String>,
+    /// Optional host-supplied agent or run label.
+    pub run_label: Option<String>,
+    pub project_id: Option<String>,
+    pub flow_run_id: Option<String>,
+    pub task_id: Option<String>,
+    pub post_id: Option<String>,
+    pub worker_id: Option<String>,
+    pub runtime_run_id: Option<String>,
+}
+
+/// Optional descriptive labels shown by process snapshots and the TUI.
+/// Labels are informational and never affect process identity or permissions.
+///
+/// Values are limited to 128 UTF-8 bytes and reject terminal control
+/// characters so they can be displayed safely by terminal clients.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedProcessMetadata {
+    framework: Option<String>,
+    run_label: Option<String>,
+    project_id: Option<String>,
+    flow_run_id: Option<String>,
+    task_id: Option<String>,
+    post_id: Option<String>,
+    worker_id: Option<String>,
+    runtime_run_id: Option<String>,
+}
+
+impl<'de> serde::Deserialize<'de> for ManagedProcessMetadata {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            framework: Option<String>,
+            run_label: Option<String>,
+            project_id: Option<String>,
+            flow_run_id: Option<String>,
+            task_id: Option<String>,
+            post_id: Option<String>,
+            worker_id: Option<String>,
+            runtime_run_id: Option<String>,
+        }
+
+        let fields = Fields::deserialize(deserializer)?;
+        ManagedProcessMetadata::new(fields.framework, fields.run_label)
+            .and_then(|metadata| {
+                metadata
+                    .with_flow_context(fields.project_id, fields.flow_run_id, fields.task_id)
+                    .and_then(|metadata| {
+                        metadata.with_work_identity(
+                            fields.post_id,
+                            fields.worker_id,
+                            fields.runtime_run_id,
+                        )
+                    })
+            })
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+impl ManagedProcessMetadata {
+    pub const MAX_LABEL_BYTES: usize = 128;
+    /// Flowboard post identifiers encode board, workspace, and post identity.
+    pub const MAX_IDENTIFIER_BYTES: usize = 2048;
+
+    pub fn new(framework: Option<String>, run_label: Option<String>) -> Result<Self, String> {
+        for (name, value) in [("framework", &framework), ("run_label", &run_label)] {
+            if let Some(value) = value {
+                if value.len() > Self::MAX_LABEL_BYTES {
+                    return Err(format!(
+                        "{name} must be at most {} UTF-8 bytes",
+                        Self::MAX_LABEL_BYTES
+                    ));
+                }
+                if value.chars().any(char::is_control) {
+                    return Err(format!("{name} cannot contain terminal control characters"));
+                }
+            }
+        }
+        Ok(Self {
+            framework,
+            run_label,
+            project_id: None,
+            flow_run_id: None,
+            task_id: None,
+            post_id: None,
+            worker_id: None,
+            runtime_run_id: None,
+        })
+    }
+
+    /// Add trusted host supplied project and Flowboard task context.
+    pub fn with_flow_context(
+        mut self,
+        project_id: Option<String>,
+        flow_run_id: Option<String>,
+        task_id: Option<String>,
+    ) -> Result<Self, String> {
+        for (name, value) in [
+            ("project_id", &project_id),
+            ("flow_run_id", &flow_run_id),
+            ("task_id", &task_id),
+        ] {
+            if let Some(value) = value {
+                if value.len() > Self::MAX_LABEL_BYTES {
+                    return Err(format!(
+                        "{name} must be at most {} UTF-8 bytes",
+                        Self::MAX_LABEL_BYTES
+                    ));
+                }
+                if value.chars().any(char::is_control) {
+                    return Err(format!("{name} cannot contain terminal control characters"));
+                }
+            }
+        }
+        self.project_id = project_id;
+        self.flow_run_id = flow_run_id;
+        self.task_id = task_id;
+        Ok(self)
+    }
+
+    /// Add the exact host-supplied Flowboard post and worker execution IDs.
+    /// These remain separate from `run_label` and each other.
+    pub fn with_work_identity(
+        mut self,
+        post_id: Option<String>,
+        worker_id: Option<String>,
+        runtime_run_id: Option<String>,
+    ) -> Result<Self, String> {
+        for (name, value, max_bytes) in [
+            ("post_id", &post_id, Self::MAX_IDENTIFIER_BYTES),
+            ("worker_id", &worker_id, Self::MAX_LABEL_BYTES),
+            ("runtime_run_id", &runtime_run_id, Self::MAX_LABEL_BYTES),
+        ] {
+            if let Some(value) = value {
+                if value.len() > max_bytes {
+                    return Err(format!("{name} must be at most {max_bytes} UTF-8 bytes"));
+                }
+                if value.chars().any(char::is_control) {
+                    return Err(format!("{name} cannot contain terminal control characters"));
+                }
+            }
+        }
+        self.post_id = post_id;
+        self.worker_id = worker_id;
+        self.runtime_run_id = runtime_run_id;
+        Ok(self)
+    }
+
+    pub fn framework(&self) -> Option<&str> {
+        self.framework.as_deref()
+    }
+
+    pub fn run_label(&self) -> Option<&str> {
+        self.run_label.as_deref()
+    }
+
+    pub fn project_id(&self) -> Option<&str> {
+        self.project_id.as_deref()
+    }
+
+    pub fn flow_run_id(&self) -> Option<&str> {
+        self.flow_run_id.as_deref()
+    }
+
+    pub fn task_id(&self) -> Option<&str> {
+        self.task_id.as_deref()
+    }
+
+    pub fn post_id(&self) -> Option<&str> {
+        self.post_id.as_deref()
+    }
+    pub fn worker_id(&self) -> Option<&str> {
+        self.worker_id.as_deref()
+    }
+    pub fn runtime_run_id(&self) -> Option<&str> {
+        self.runtime_run_id.as_deref()
+    }
 }
 
 /// Lifecycle status for a job started through [`Supervisor::start_background`].
@@ -259,6 +443,7 @@ struct RegisteredProcess {
     container: Arc<ProcessContainer>,
     stop_requested: Arc<AtomicBool>,
     shutdown_lock: Arc<AsyncMutex<()>>,
+    metadata: Arc<Mutex<ManagedProcessMetadata>>,
 }
 
 #[derive(Clone)]
@@ -298,6 +483,7 @@ impl Supervisor {
             shutdown_on_drop: true,
             log: EventLog::new(),
             run_id: None,
+            tui_sessions: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
@@ -327,6 +513,91 @@ impl Supervisor {
             shutdown_on_drop: false,
             log: Arc::clone(&self.log),
             run_id: Some(run_id),
+            tui_sessions: Arc::clone(&self.tui_sessions),
+        }
+    }
+
+    /// Launch a separate terminal UI process connected to this supervisor by
+    /// private, inherited standard input/output pipes. The UI process is owned
+    /// separately from managed agent processes and is not included in
+    /// `shutdown_all()`.
+    ///
+    /// The executable must speak [`crate::tui`] protocol version 1. Its stdin
+    /// and stdout are reserved for framed protocol data; use the controlling
+    /// terminal for interactive rendering and keyboard input. The supervisor
+    /// terminates the UI when it is dropped.
+    pub fn start_tui(
+        &self,
+        executable: impl AsRef<std::path::Path>,
+        args: &[std::ffi::OsString],
+    ) -> Result<(), SandboxError> {
+        if !self.shutdown_on_drop {
+            return Err(SandboxError::new(
+                crate::SandboxErrorCode::Unsupported,
+                crate::SandboxPhase::Spawn,
+                "the TUI can only be launched by the owning supervisor",
+            ));
+        }
+        tokio::runtime::Handle::try_current().map_err(|_| {
+            SandboxError::new(
+                crate::SandboxErrorCode::Unsupported,
+                crate::SandboxPhase::Spawn,
+                "start_tui requires an active Tokio runtime",
+            )
+        })?;
+
+        let mut child = Command::new(executable.as_ref())
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(SandboxError::spawn)?;
+        let Some(stdin) = child.stdin.take() else {
+            let _ = child.start_kill();
+            return Err(SandboxError::execution(std::io::Error::other(
+                "TUI child stdin pipe was unavailable",
+            )));
+        };
+        let Some(stdout) = child.stdout.take() else {
+            let _ = child.start_kill();
+            return Err(SandboxError::execution(std::io::Error::other(
+                "TUI child stdout pipe was unavailable",
+            )));
+        };
+
+        let session_id = Uuid::new_v4();
+        let cancellation = CancellationToken::new();
+        lock_tui_sessions(&self.tui_sessions).insert(session_id, cancellation.clone());
+        let sessions = Arc::clone(&self.tui_sessions);
+        let supervisor = self.tui_view();
+        tokio::spawn(async move {
+            let mut child = child;
+            tokio::select! {
+                _ = cancellation.cancelled() => {}
+                _ = crate::tui::serve(stdout, stdin, supervisor) => {}
+            }
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            lock_tui_sessions(&sessions).remove(&session_id);
+        });
+        Ok(())
+    }
+
+    pub(crate) fn tui_view(&self) -> Supervisor {
+        Supervisor {
+            processes: Arc::clone(&self.processes),
+            jobs: Arc::clone(&self.jobs),
+            supervisor_id: self.supervisor_id,
+            next_process_id: Arc::clone(&self.next_process_id),
+            events: self.events.clone(),
+            agent_runs: Arc::clone(&self.agent_runs),
+            owned_process_ids: None,
+            shutdown_on_drop: false,
+            log: Arc::clone(&self.log),
+            run_id: None,
+            tui_sessions: Arc::clone(&self.tui_sessions),
         }
     }
 
@@ -356,8 +627,19 @@ impl Supervisor {
         command: &crate::Command,
         policy: &crate::Policy,
     ) -> Result<SupervisedChild, SandboxError> {
+        self.start_with_metadata(command, policy, ManagedProcessMetadata::default())
+    }
+
+    /// Start a caller-owned process with optional labels for process snapshots
+    /// and the supervisor TUI. Labels are descriptive only.
+    pub fn start_with_metadata(
+        &self,
+        command: &crate::Command,
+        policy: &crate::Policy,
+        metadata: ManagedProcessMetadata,
+    ) -> Result<SupervisedChild, SandboxError> {
         let request = command.request(policy);
-        spawn_with_supervisor(&request, self)
+        spawn_with_supervisor_metadata(&request, self, metadata)
     }
 
     /// Watch this supervisor's work. This only observes: use [`Self::start`],
@@ -409,6 +691,17 @@ impl Supervisor {
         command: &crate::Command,
         policy: &crate::Policy,
     ) -> Result<SupervisorProcessId, SandboxError> {
+        self.start_background_with_metadata(command, policy, ManagedProcessMetadata::default())
+    }
+
+    /// Start a supervisor-owned background job with optional descriptive
+    /// framework and run labels.
+    pub fn start_background_with_metadata(
+        &self,
+        command: &crate::Command,
+        policy: &crate::Policy,
+        metadata: ManagedProcessMetadata,
+    ) -> Result<SupervisorProcessId, SandboxError> {
         tokio::runtime::Handle::try_current().map_err(|_| {
             SandboxError::new(
                 crate::SandboxErrorCode::Unsupported,
@@ -417,7 +710,7 @@ impl Supervisor {
             )
         })?;
 
-        let mut child = self.start(command, policy)?;
+        let mut child = self.start_with_metadata(command, policy, metadata)?;
         let retained_limits = child.output_limits();
         child.remove_output_limits();
         let id = child.supervisor_id().ok_or_else(|| {
@@ -685,6 +978,11 @@ impl Supervisor {
                 .drain(..)
                 .find(|member| member.process_id == process.process_id)
         });
+        let metadata = process
+            .metadata
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
         Some(ManagedProcessInfo {
             supervisor_id: id,
             process_id: process.process_id,
@@ -692,6 +990,14 @@ impl Supervisor {
             parent_process_id: member.as_ref().and_then(|member| member.parent_process_id),
             start_time_ticks: member.as_ref().and_then(|member| member.start_time_ticks),
             executable: member.and_then(|member| member.executable),
+            framework: metadata.framework().map(str::to_owned),
+            run_label: metadata.run_label().map(str::to_owned),
+            project_id: metadata.project_id.clone(),
+            flow_run_id: metadata.flow_run_id.clone(),
+            task_id: metadata.task_id.clone(),
+            post_id: metadata.post_id.clone(),
+            worker_id: metadata.worker_id.clone(),
+            runtime_run_id: metadata.runtime_run_id.clone(),
         })
     }
 
@@ -773,12 +1079,14 @@ impl Supervisor {
         process_id: Option<u32>,
         container: Arc<ProcessContainer>,
         executable: ExecutableIdentity,
+        metadata: Option<ManagedProcessMetadata>,
     ) -> Option<ProcessLease> {
         let process_id = process_id?;
         let supervisor_id = self.allocate_process_id();
         if let Some(ids) = &self.owned_process_ids {
             lock_process_ids(ids).insert(supervisor_id);
         }
+        let metadata = metadata.unwrap_or_default();
         lock_processes(&self.processes).insert(
             supervisor_id,
             RegisteredProcess {
@@ -786,11 +1094,17 @@ impl Supervisor {
                 container: Arc::clone(&container),
                 stop_requested: Arc::new(AtomicBool::new(false)),
                 shutdown_lock: Arc::new(AsyncMutex::new(())),
+                metadata: Arc::new(Mutex::new(metadata.clone())),
             },
         );
         let _ = self.events.send(crate::LifecycleEvent::Started {
             process_id,
             executable,
+        });
+        let _ = self.events.send(crate::LifecycleEvent::ProcessContext {
+            supervisor_process_id: supervisor_id,
+            process_id,
+            metadata,
         });
         Some(ProcessLease {
             supervisor_id,
@@ -951,6 +1265,9 @@ impl Default for Supervisor {
 impl Drop for Supervisor {
     fn drop(&mut self) {
         if self.shutdown_on_drop {
+            for cancellation in lock_tui_sessions(&self.tui_sessions).values() {
+                cancellation.cancel();
+            }
             self.terminate_all();
             self.log.close();
         }
@@ -993,6 +1310,14 @@ fn lock_processes(
     processes: &Mutex<BTreeMap<SupervisorProcessId, RegisteredProcess>>,
 ) -> MutexGuard<'_, BTreeMap<SupervisorProcessId, RegisteredProcess>> {
     processes
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn lock_tui_sessions(
+    sessions: &Mutex<BTreeMap<Uuid, CancellationToken>>,
+) -> MutexGuard<'_, BTreeMap<Uuid, CancellationToken>> {
+    sessions
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
@@ -1313,14 +1638,22 @@ impl Drop for SupervisedChild {
 }
 
 pub fn spawn(request: &ExecutionRequest) -> Result<SupervisedChild, SandboxError> {
-    spawn_internal(request, None)
+    spawn_internal(request, None, None)
 }
 
 pub fn spawn_with_supervisor(
     request: &ExecutionRequest,
     supervisor: &Supervisor,
 ) -> Result<SupervisedChild, SandboxError> {
-    let mut child = spawn_internal(request, Some(supervisor))?;
+    spawn_with_supervisor_metadata(request, supervisor, ManagedProcessMetadata::default())
+}
+
+fn spawn_with_supervisor_metadata(
+    request: &ExecutionRequest,
+    supervisor: &Supervisor,
+    metadata: ManagedProcessMetadata,
+) -> Result<SupervisedChild, SandboxError> {
+    let mut child = spawn_internal(request, Some(supervisor), Some(metadata))?;
     if let Some(id) = child.supervisor_id {
         let tap = supervisor.process_tap(id);
         tap.started(child.executable.clone());
@@ -1332,6 +1665,7 @@ pub fn spawn_with_supervisor(
 fn spawn_internal(
     request: &ExecutionRequest,
     supervisor: Option<&Supervisor>,
+    metadata: Option<ManagedProcessMetadata>,
 ) -> Result<SupervisedChild, SandboxError> {
     let identity = validate_request(request, &[])?;
     if let Some(policy) = &request.policy.filesystem {
@@ -1344,7 +1678,7 @@ fn spawn_internal(
     validate_windows_network_policy(request, &identity)?;
     #[cfg(windows)]
     if request.policy.filesystem.is_some() {
-        return spawn_windows_internal(request, supervisor, identity);
+        return spawn_windows_internal(request, supervisor, identity, metadata);
     }
     #[cfg(windows)]
     let executable = crate::windows_filesystem::create_process_path(
@@ -1407,8 +1741,14 @@ fn spawn_internal(
         .set_process_id(process_id)
         .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
     let container = Arc::new(container);
-    let lease = supervisor
-        .and_then(|value| value.register(process_id, Arc::clone(&container), identity.clone()));
+    let lease = supervisor.and_then(|value| {
+        value.register(
+            process_id,
+            Arc::clone(&container),
+            identity.clone(),
+            metadata.clone(),
+        )
+    });
     let supervisor_id = lease.as_ref().map(|lease| lease.supervisor_id);
     Ok(SupervisedChild {
         process_id,
@@ -1443,6 +1783,7 @@ fn spawn_windows_internal(
     request: &ExecutionRequest,
     supervisor: Option<&Supervisor>,
     identity: ExecutableIdentity,
+    metadata: Option<ManagedProcessMetadata>,
 ) -> Result<SupervisedChild, SandboxError> {
     let container = Arc::new(
         ProcessContainer::new()
@@ -1478,8 +1819,14 @@ fn spawn_windows_internal(
     container
         .set_process_id(process_id)
         .map_err(|error| SandboxError::spawn(error).with_executable(identity.clone()))?;
-    let lease = supervisor
-        .and_then(|value| value.register(process_id, Arc::clone(&container), identity.clone()));
+    let lease = supervisor.and_then(|value| {
+        value.register(
+            process_id,
+            Arc::clone(&container),
+            identity.clone(),
+            metadata.clone(),
+        )
+    });
     let supervisor_id = lease.as_ref().map(|lease| lease.supervisor_id);
     Ok(SupervisedChild {
         process_id,
@@ -1926,7 +2273,7 @@ async fn execute_windows_with_cancellation(
     identity: ExecutableIdentity,
     tap: Option<ProcessTap>,
 ) -> Result<ExecutionOutput, SandboxError> {
-    let mut child = spawn_windows_internal(request, None, identity.clone())?;
+    let mut child = spawn_windows_internal(request, None, identity.clone(), None)?;
     let mut stdin = child.take_stdin();
     let stdout = child
         .take_stdout()
@@ -2188,6 +2535,108 @@ mod tests {
         }
     }
 
+    #[test]
+    fn managed_process_metadata_rejects_terminal_controls_and_oversized_labels() {
+        assert!(ManagedProcessMetadata::new(
+            Some("OpenAI Agents SDK".into()),
+            Some("run-7".into())
+        )
+        .is_ok());
+        assert!(ManagedProcessMetadata::new(Some("LangGraph\u{1b}[2J".into()), None).is_err());
+        assert!(ManagedProcessMetadata::new(
+            None,
+            Some("x".repeat(ManagedProcessMetadata::MAX_LABEL_BYTES + 1))
+        )
+        .is_err());
+        assert!(ManagedProcessMetadata::default()
+            .with_flow_context(None, Some("bad\u{1b}".into()), None)
+            .is_err());
+        assert!(ManagedProcessMetadata::default()
+            .with_flow_context(Some("x".repeat(129)), None, None)
+            .is_err());
+    }
+
+    #[test]
+    fn managed_process_metadata_serializes_and_deserialization_revalidates() {
+        let flowboard_post = format!(
+            "board:flowboard%3A{}:/Users/louis/sources/rooagi-sandbox:agent-supervisor:post:{}",
+            "a6e188d5a21606a1c071b0a7a8f2b33a17a5fb43387093523c9d48655ad27f7e",
+            "0".repeat(20)
+        );
+        assert!(flowboard_post.len() > ManagedProcessMetadata::MAX_LABEL_BYTES);
+        let metadata =
+            ManagedProcessMetadata::new(Some("LangGraph".into()), Some("support-agent".into()))
+                .unwrap()
+                .with_flow_context(
+                    Some("project-a".into()),
+                    Some("flow-12".into()),
+                    Some("task-17".into()),
+                )
+                .unwrap()
+                .with_work_identity(
+                    Some(flowboard_post.clone()),
+                    Some("worker-3".into()),
+                    Some("runtime-9".into()),
+                )
+                .unwrap();
+        let value = serde_json::to_value(&metadata).unwrap();
+        let round_trip: ManagedProcessMetadata = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(round_trip, metadata);
+        assert_eq!(round_trip.post_id(), Some(flowboard_post.as_str()));
+        assert_eq!(round_trip.worker_id(), Some("worker-3"));
+        assert_eq!(round_trip.runtime_run_id(), Some("runtime-9"));
+
+        let mut hostile = value.clone();
+        hostile["project_id"] = serde_json::json!("bad\u{001b}[2J");
+        assert!(serde_json::from_value::<ManagedProcessMetadata>(hostile).is_err());
+
+        let mut oversized = value;
+        oversized["task_id"] = serde_json::json!("x".repeat(129));
+        assert!(serde_json::from_value::<ManagedProcessMetadata>(oversized).is_err());
+        let invalid_worker = serde_json::json!({"worker_id":"bad\u{001b}"});
+        assert!(serde_json::from_value::<ManagedProcessMetadata>(invalid_worker).is_err());
+        let oversized_post = serde_json::json!({"post_id":"x".repeat(ManagedProcessMetadata::MAX_IDENTIFIER_BYTES + 1)});
+        assert!(serde_json::from_value::<ManagedProcessMetadata>(oversized_post).is_err());
+    }
+
+    #[tokio::test]
+    async fn metadata_is_visible_in_managed_process_snapshots_without_changing_ids() {
+        let supervisor = Supervisor::new();
+        let command = crate::Command {
+            argv: vec!["/bin/sleep".into(), "0.1".into()],
+            cwd: None,
+        };
+        let metadata =
+            ManagedProcessMetadata::new(Some("LangGraph".into()), Some("support-agent".into()))
+                .unwrap()
+                .with_flow_context(
+                    Some("project-a".into()),
+                    Some("flow-12".into()),
+                    Some("task-17".into()),
+                )
+                .unwrap()
+                .with_work_identity(
+                    Some("post-17".into()),
+                    Some("worker-3".into()),
+                    Some("runtime-9".into()),
+                )
+                .unwrap();
+        let id = supervisor
+            .start_background_with_metadata(&command, &crate::Policy::default(), metadata)
+            .unwrap();
+        let info = supervisor.process(id).unwrap();
+        assert_eq!(info.supervisor_id, id);
+        assert_eq!(info.framework.as_deref(), Some("LangGraph"));
+        assert_eq!(info.run_label.as_deref(), Some("support-agent"));
+        assert_eq!(info.project_id.as_deref(), Some("project-a"));
+        assert_eq!(info.flow_run_id.as_deref(), Some("flow-12"));
+        assert_eq!(info.task_id.as_deref(), Some("task-17"));
+        assert_eq!(info.post_id.as_deref(), Some("post-17"));
+        assert_eq!(info.worker_id.as_deref(), Some("worker-3"));
+        assert_eq!(info.runtime_run_id.as_deref(), Some("runtime-9"));
+        supervisor.wait_process(id).await.unwrap();
+    }
+
     #[tokio::test]
     async fn environment_is_empty_unless_explicitly_released() {
         let mut request = request("/usr/bin/env");
@@ -2293,6 +2742,17 @@ mod tests {
         let child = spawn_with_supervisor(&request("/usr/bin/true"), &supervisor).unwrap();
         let started = events.recv().await.unwrap();
         assert!(matches!(started, crate::LifecycleEvent::Started { .. }));
+        let context = events.recv().await.unwrap();
+        let serialized = serde_json::to_value(&context).unwrap();
+        let decoded: crate::LifecycleEvent = serde_json::from_value(serialized).unwrap();
+        assert!(matches!(
+            decoded,
+            crate::LifecycleEvent::ProcessContext {
+                supervisor_process_id: id,
+                metadata,
+                ..
+            } if child.supervisor_id() == Some(id) && metadata == ManagedProcessMetadata::default()
+        ));
         child.wait().await.unwrap();
         let exited = events.recv().await.unwrap();
         assert!(matches!(exited, crate::LifecycleEvent::Exited { .. }));
@@ -2827,6 +3287,7 @@ mod tests {
                             requested_path: "test".into(),
                             canonical_path: Some("test".into()),
                         },
+                        None,
                     );
                 });
             }

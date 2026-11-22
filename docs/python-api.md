@@ -5,6 +5,15 @@ Create an `AgentRun` through `Supervisor.start_agent_run()` for each framework
 call. The supervisor tracks that run's tools and can also own background jobs
 that continue between calls. The framework still runs the agent and makes
 model requests; Agent Supervisor does not sandbox Python code or model calls.
+When a host starts a process for a Flowboard task, it can pass optional
+`project_id`, `flow_run_id`, `task_id`, `post_id`, `worker_id`, and
+`runtime_run_id` values to `Supervisor.start()`, `Supervisor.start_background()`,
+or `AgentRun.start()`. These trusted host values remain distinct from
+`framework` and `run_label` in process snapshots and the process manager TUI.
+They are informational; process control still uses the Supervisor-scoped
+process ID. Descriptive labels and worker/runtime IDs are limited to 128 UTF-8
+bytes; structured `post_id` values support 2048 bytes. Every value rejects
+terminal controls.
 
 For the shared concepts and Rust/Python type mapping, see [Core concepts](api-reference.md). For framework-specific examples, see [Agent SDK
 integrations](api-boundaries.md).
@@ -13,16 +22,16 @@ For application startup and shutdown, see the [Supervisor guide](supervisor-life
 
 ## Install
 
-Install the published Python package with:
+Install the published package with the optional dependency for your framework.
+For example, to use the OpenAI Agents SDK adapter:
 
 ```bash
-python -m pip install agent-supervisor
+python -m pip install 'agent-supervisor[openai]'
 ```
 
-Persistent-process support and the run adapters described below are included
-in the repository source. To use them with a framework dependency, clone the
-repository and install the matching extra from the `python` directory. For
-example:
+The published package includes the embedded supervisor, process APIs, and
+framework adapters. For development against the repository source, clone it
+and install the matching extra from the `python` directory:
 
 ```bash
 git clone https://github.com/RooAGI/agent-supervisor.git
@@ -30,10 +39,10 @@ cd agent-supervisor/python
 python -m pip install -e '.[openai]'
 ```
 
-Replace `openai` with `microsoft`, `langgraph`, `pydantic-ai`, or `google-adk`
-for another adapter. The package requires Python 3.9 or newer. Source builds
-also need Rust and your platform's native build tools. See the
-[quickstart](quickstart.md) for platform setup.
+Replace `openai` with `microsoft`, `langgraph`, `pydantic-ai`, `google-adk`,
+`mcp`, or `fastmcp` for another optional integration. The package requires
+Python 3.9 or newer. Source builds also need Rust and your platform's native
+build tools. See the [quickstart](quickstart.md) for the first command.
 
 ## Supervisor
 
@@ -151,6 +160,36 @@ async def main() -> None:
 
 asyncio.run(main())
 ```
+
+### Launch the terminal process manager
+
+Build the standalone TUI binary as described in the
+[TUI guide](tui.md#build-the-tui), then launch it from the supervisor. The TUI
+uses the application's controlling terminal for keyboard and screen I/O;
+standard input and output are reserved for its private supervisor protocol.
+
+```text
+async def start_tui(executable, *, args=()) -> None
+```
+
+```python
+import asyncio
+import os
+from pathlib import Path
+from agent_supervisor import Supervisor
+
+async def main():
+    supervisor = Supervisor()
+    tui = Path(os.environ["AGENT_SUPERVISOR_TUI"])
+    await supervisor.start_tui(tui)
+
+asyncio.run(main())
+```
+
+The `Supervisor` launches and owns this separate TUI process, then stops it
+when the supervisor is dropped. See the
+[Python TUI example](https://github.com/RooAGI/agent-supervisor/blob/main/examples/python/supervisor_tui.py) for launching the
+dashboard with multiple framework-labelled background jobs.
 
 See the runnable [Python background-job example](https://github.com/RooAGI/agent-supervisor/blob/main/examples/python/supervisor_background_jobs.py).
 

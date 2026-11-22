@@ -1,0 +1,150 @@
+{
+  "content_hash": "sha256:9c910b1a37c933969b026e31ff9795f745465c49acac8d9a0e156d7c748ca3cf",
+  "contract_version": 1,
+  "issuer": "agentflow",
+  "snapshot": {
+    "post_templates": [
+      {
+        "content_hash": "sha256:7f0a46a911a8c23c7410341085cf960675377a20e4132bc74a0ea5be3b8ab3e5",
+        "presentation": {
+          "components": [
+            {
+              "field_ids": [
+                "status",
+                "assignee",
+                "acceptance_criteria",
+                "dependencies",
+                "evidence"
+              ],
+              "kind": "fields",
+              "title": "Task"
+            }
+          ],
+          "version": 1
+        },
+        "schema": {
+          "fields": [
+            {
+              "enum": [
+                "ready",
+                "assigned",
+                "running",
+                "blocked",
+                "review",
+                "changes_requested",
+                "done",
+                "cancelled"
+              ],
+              "id": "status",
+              "label": "Status",
+              "required": true,
+              "type": "string"
+            },
+            {
+              "id": "assignee",
+              "label": "Assignee",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "id": "acceptance_criteria",
+              "label": "Acceptance criteria",
+              "required": false,
+              "type": "string_list"
+            },
+            {
+              "id": "dependencies",
+              "label": "Dependencies",
+              "required": false,
+              "type": "string_list"
+            },
+            {
+              "id": "evidence",
+              "label": "Evidence",
+              "required": false,
+              "type": "string_list"
+            }
+          ],
+          "version": 1
+        },
+        "template_id": "task",
+        "version": 1
+      }
+    ],
+    "presentation": {
+      "components": [
+        {
+          "kind": "hero",
+          "summary_fields": [
+            "success_criteria"
+          ],
+          "title_field": "goal"
+        },
+        {
+          "field_ids": [
+            "assignee"
+          ],
+          "group_by": "status",
+          "groups": [
+            {
+              "label": "Ready",
+              "value": "ready"
+            },
+            {
+              "label": "Assigned",
+              "value": "assigned"
+            },
+            {
+              "label": "In progress",
+              "value": "running"
+            },
+            {
+              "label": "Blocked",
+              "value": "blocked"
+            },
+            {
+              "label": "In review",
+              "value": "review"
+            },
+            {
+              "label": "Changes requested",
+              "value": "changes_requested"
+            },
+            {
+              "label": "Done",
+              "value": "done"
+            },
+            {
+              "label": "Cancelled",
+              "value": "cancelled"
+            }
+          ],
+          "kind": "post_groups",
+          "post_template_ids": [
+            "task"
+          ]
+        }
+      ],
+      "version": 1
+    },
+    "schema": {
+      "fields": [
+        {
+          "id": "goal",
+          "label": "Goal",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "id": "success_criteria",
+          "label": "Success criteria",
+          "required": true,
+          "type": "string_list"
+        }
+      ],
+      "version": 1
+    }
+  },
+  "template_id": "project",
+  "version": 1
+}

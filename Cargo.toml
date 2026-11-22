@@ -1,6 +1,6 @@
 [package]
 name = "agent-supervisor"
-version = "0.3.0"
+version = "0.3.2"
 edition = "2021"
 license = "Apache-2.0"
 description = "Policy-driven process isolation and supervision for RooAGI runtimes"
@@ -13,11 +13,12 @@ exclude = ["dev/**", "python/**"]
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 thiserror = "1"
-tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt", "rt-multi-thread", "sync", "time"] }
 tokio-util = "0.7"
 portable-pty = "0.9"
 wasmi = { version = "2", optional = true }
 serde_json = "1"
+sha2 = "0.10"
 uuid = { version = "1", features = ["v4", "serde"] }
 
 [features]
@@ -56,3 +57,7 @@ wat = "1"
 name = "mcp-stdio-fixture"
 path = "tests/fixtures/mcp_stdio_fixture.rs"
 test = false
+
+[[bin]]
+name = "agent-supervisor-service"
+path = "src/bin/agent-supervisor-service.rs"
