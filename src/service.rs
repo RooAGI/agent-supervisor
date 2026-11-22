@@ -2416,7 +2416,15 @@ impl SupervisorService {
             }
             self.complete_reservation(&coordinator_request_id);
         }
-        let stream = child.into_event_stream().map_err(|e| e.to_string())?;
+        let mut stream = child.into_event_stream().map_err(|e| e.to_string())?;
+        // One-shot commands ask for what they leave running to be stopped
+        // when they exit, so nothing outlives them unsupervised.
+        stream.stop_process_group_on_exit(
+            request
+                .get("stopProcessGroupOnExit")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        );
         let (events, _) = broadcast::channel(128);
         let history = Arc::new(Mutex::new(VecDeque::new()));
         let (input, mut input_rx) = mpsc::channel(64);
@@ -3558,6 +3566,46 @@ mod tests {
             serde_json::from_str::<Value>(&line).unwrap()["code"],
             "unauthorized"
         );
+    }
+
+    // Found live 2026-11-22: a one-shot command that left a server running
+    // was never reported as exited, and the server outlived it unsupervised.
+    #[tokio::test]
+    async fn a_start_asking_to_stop_its_process_group_exits_and_leaves_nothing_running() {
+        let service = SupervisorService::new(
+            Arc::new(Supervisor::new()),
+            "v".repeat(32),
+            "c".repeat(32),
+            "t".repeat(32),
+        )
+        .unwrap();
+        let (mut reader, mut writer) = connect(&service, "control", &"c".repeat(32)).await;
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("pid");
+        let script = format!("sleep 30 & echo $! > '{}'; echo started", pid_file.display());
+        let request = json!({"type":"start","requestId":"s1","command":{"executable":"/bin/sh","args":["-c",script]},"policy":crate::Policy::default(),"stopProcessGroupOnExit":true});
+        write_json(&mut writer, &request).await.unwrap();
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["type"], "started");
+        let mut exited = None;
+        while exited.is_none() {
+            line.clear();
+            tokio::time::timeout(Duration::from_secs(5), reader.read_line(&mut line))
+                .await
+                .expect("the exit is reported while the background process holds the output")
+                .unwrap();
+            let event: Value = serde_json::from_str(&line).unwrap();
+            if event["type"] == "exited" {
+                exited = Some(event);
+            }
+        }
+        let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while unsafe { libc::kill(pid, 0) } == 0 && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "the background process was stopped");
     }
 
     #[tokio::test]

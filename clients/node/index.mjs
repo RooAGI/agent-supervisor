@@ -51,12 +51,12 @@ export class SupervisorClient extends EventEmitter {
     this.socket.once('connect', () => this.socket.write(`${JSON.stringify({ type: 'auth', role, token })}\n`))
   }
 
-  async start({ executable, args = [], cwd, env, metadata, policy, attemptId, generation }) {
+  async start({ executable, args = [], cwd, env, metadata, policy, attemptId, generation, stopProcessGroupOnExit }) {
     if (this.role !== 'control') throw new Error('control credential required to start processes')
     if (!policy) throw new Error('an explicit Supervisor policy is required')
     if ((attemptId === undefined) !== (generation === undefined)) throw new Error('attemptId and generation must be provided together')
     const handle = new SupervisorProcessHandle(this)
-    const started = await this.#startRequest({ executable, args, cwd, metadata, policy, attemptId, generation }, handle)
+    const started = await this.#startRequest({ executable, args, cwd, metadata, policy, attemptId, generation, stopProcessGroupOnExit }, handle)
     handle._setOutputToken(started.outputToken)
     return handle
   }
@@ -300,7 +300,7 @@ export class SupervisorClient extends EventEmitter {
     return handle
   }
 
-  #startRequest({ executable, args = [], cwd, metadata, policy, attemptId, generation }, handle) {
+  #startRequest({ executable, args = [], cwd, metadata, policy, attemptId, generation, stopProcessGroupOnExit }, handle) {
     if ((attemptId === undefined) !== (generation === undefined)) return Promise.reject(new Error('attemptId and generation must be provided together'))
     const requestId = this.#requestId()
     return new Promise((resolve, reject) => {
@@ -309,7 +309,8 @@ export class SupervisorClient extends EventEmitter {
         type: 'start', requestId,
         command: { executable, args, ...(cwd ? { cwd } : {}) },
         metadata: metadata ?? {}, policy,
-        ...(attemptId !== undefined ? { attemptId, generation } : {})
+        ...(attemptId !== undefined ? { attemptId, generation } : {}),
+        ...(stopProcessGroupOnExit ? { stopProcessGroupOnExit: true } : {})
       })
     })
   }
