@@ -2454,7 +2454,32 @@ impl SupervisorService {
                         None => {},
                     },
                     next = stream.next() => match next {
-                        Ok(Some(event)) => {
+                        // The stream ends with an error when the process broke a
+                        // limit (its output passed the policy's output bytes); it
+                        // has already stopped the process and kept the receipt.
+                        // Report that exit, or a client waits for it forever.
+                        Ok(Some(_)) | Err(_) => {
+                            let event = match next {
+                                Ok(Some(event)) => event,
+                                Ok(None) => break,
+                                Err(error) => match stream.wait().await {
+                                    Ok(mut receipt) => {
+                                        // The process may die of the closed pipe
+                                        // first; the limit is the real reason.
+                                        match error.code_kind() {
+                                            crate::SandboxErrorCode::OutputTooLarge => {
+                                                receipt.termination = crate::TerminationReason::StdoutLimitExceeded
+                                            }
+                                            crate::SandboxErrorCode::StderrTooLarge => {
+                                                receipt.termination = crate::TerminationReason::StderrLimitExceeded
+                                            }
+                                            _ => {}
+                                        }
+                                        ProcessEvent::Exited(receipt)
+                                    }
+                                    Err(_) => break,
+                                },
+                            };
                             let value = event_json(id, event, &event_metadata);
                             if let Some(value) = value {
                                 {
@@ -3580,6 +3605,46 @@ mod tests {
     // Found live 2026-11-22: a one-shot command that left a server running
     // was never reported as exited, and the server outlived it unsupervised.
     #[tokio::test]
+    async fn a_process_over_its_output_limit_is_reported_as_exited() {
+        // Found live: a worker's `cat` of a 13 MB file passed the 1 MiB limit;
+        // the process was stopped but no exit was sent, so the client hung.
+        let service = SupervisorService::new(
+            Arc::new(Supervisor::new()),
+            "v".repeat(32),
+            "c".repeat(32),
+            "t".repeat(32),
+        )
+        .unwrap();
+        let (mut reader, mut writer) = connect(&service, "control", &"c".repeat(32)).await;
+        let mut policy = serde_json::to_value(crate::Policy::default()).unwrap();
+        policy["limits"]["outputBytes"] = json!(64 * 1024);
+        let request = json!({"type":"start","requestId":"s1","command":{"executable":"/bin/sh","args":["-c","head -c 2000000 /dev/zero"]},"policy":policy,"stopProcessGroupOnExit":true});
+        write_json(&mut writer, &request).await.unwrap();
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&line).unwrap()["type"],
+            "started"
+        );
+        let mut exited = None;
+        while exited.is_none() {
+            line.clear();
+            tokio::time::timeout(Duration::from_secs(5), reader.read_line(&mut line))
+                .await
+                .expect("the exit is reported after the output limit")
+                .unwrap();
+            let event: Value = serde_json::from_str(&line).unwrap();
+            if event["type"] == "exited" {
+                exited = Some(event);
+            }
+        }
+        assert_eq!(
+            exited.unwrap()["receipt"]["termination"],
+            json!("StdoutLimitExceeded")
+        );
+    }
+
+    #[tokio::test]
     async fn a_start_asking_to_stop_its_process_group_exits_and_leaves_nothing_running() {
         let service = SupervisorService::new(
             Arc::new(Supervisor::new()),
@@ -3591,12 +3656,18 @@ mod tests {
         let (mut reader, mut writer) = connect(&service, "control", &"c".repeat(32)).await;
         let directory = tempfile::tempdir().unwrap();
         let pid_file = directory.path().join("pid");
-        let script = format!("sleep 30 & echo $! > '{}'; echo started", pid_file.display());
+        let script = format!(
+            "sleep 30 & echo $! > '{}'; echo started",
+            pid_file.display()
+        );
         let request = json!({"type":"start","requestId":"s1","command":{"executable":"/bin/sh","args":["-c",script]},"policy":crate::Policy::default(),"stopProcessGroupOnExit":true});
         write_json(&mut writer, &request).await.unwrap();
         let mut line = String::new();
         reader.read_line(&mut line).await.unwrap();
-        assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["type"], "started");
+        assert_eq!(
+            serde_json::from_str::<Value>(&line).unwrap()["type"],
+            "started"
+        );
         let mut exited = None;
         while exited.is_none() {
             line.clear();
@@ -3609,12 +3680,20 @@ mod tests {
                 exited = Some(event);
             }
         }
-        let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
         while unsafe { libc::kill(pid, 0) } == 0 && std::time::Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "the background process was stopped");
+        assert_ne!(
+            unsafe { libc::kill(pid, 0) },
+            0,
+            "the background process was stopped"
+        );
     }
 
     #[tokio::test]
