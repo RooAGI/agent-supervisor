@@ -53,8 +53,9 @@ It is useful for:
 - **Supervisor service:** an authenticated local service with a run
   coordinator and role-scoped clients, so processes are owned by the service
   rather than by a desktop or framework client.
-- **Terminal process manager:** a TUI for inspecting and stopping supervised
-  processes.
+- **Manage agent work:** the terminal manager shows live processes alongside
+  active runs, recent run history, activity and attempt state, worker tool
+  requests, and coordinated FlowRuns.
 - **WebAssembly runner (opt-in):** run self-contained modules with no host
   imports under memory and fuel limits.
 
@@ -193,10 +194,15 @@ the [run coordinator](docs/supervisor-coordinator.md), and the
 [Supervisor guide](docs/supervisor-lifecycle.md).
 
 **Terminal UI:** `agent-supervisor-tui` (built from [`tui/`](tui/)) inspects,
-attaches to, and stops supervised processes. See the
+attaches to, and stops supervised processes. Its work panel separates active
+and nonterminal runs from recent terminal runs, and shows their activities,
+attempts, validated worker tool requests, and Supervisor FlowRuns. See the
 [terminal process manager](docs/tui.md).
 
-![Agent Supervisor terminal UI: the Supervisor's own process, one running RooAGI worker, and its Project's recent runs with their attempts](docs/assets/process-manager-tui.svg)
+The frame below is a live capture from the TUI, showing the Supervisor and one
+running managed process with its PID and metadata labels.
+
+![Agent Supervisor process manager showing the coordinator PID and one running supervised process labeled RooAGI and Live TUI preview](docs/assets/process-manager-tui.svg)
 
 ## Platform support
 
