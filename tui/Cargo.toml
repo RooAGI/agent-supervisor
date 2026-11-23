@@ -6,8 +6,16 @@ publish = false
 
 [dependencies]
 agent-supervisor = { path = ".." }
+serde = "1"
 serde_json = "1"
+# Terminal UI: ratatui draws the screen; crossterm reads keys and drives the
+# terminal. ratatui 0.30 uses crossterm 0.29, so both name the same crate.
+ratatui = { version = "0.30", default-features = false, features = ["crossterm", "layout-cache"] }
+crossterm = "0.29"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+# In Supervisor-launched mode stdin/stdout are the protocol pipes, so keys and
+# raw mode must come from the controlling terminal itself.
+crossterm = { version = "0.29", features = ["use-dev-tty"] }

@@ -69,7 +69,7 @@ Supervisor responses:
 
 ```json
 {"version":1,"type":"hello","selected_version":1,"supervisor_id":"<uuid>"}
-{"version":1,"type":"snapshot","request_id":1,"processes":[{"process_id":"v1:<uuid>:<sequence>","pid":1234,"alive":true,"executable":"/path/to/program","framework":null,"run_label":null}]}
+{"version":1,"type":"snapshot","request_id":1,"processes":[{"process_id":"v1:<uuid>:<sequence>","pid":1234,"alive":true,"parent_process_id":null,"start_time_ticks":null,"executable":"/path/to/program","framework":null,"run_label":null}]}
 {"version":1,"type":"processes","request_id":2,"processes":[]}
 {"version":1,"type":"stop_result","request_id":3,"process_id":"v1:<uuid>:<sequence>","outcome":"force_stop_requested"}
 {"version":1,"type":"shutdown_result","request_id":4,"outcomes":[]}
@@ -77,18 +77,37 @@ Supervisor responses:
 ```
 
 The process fields `framework` and `run_label` are optional informational
-values. They are not identities and never authorize a request. `pid` is
-display-only; all stop operations use the full supervisor-scoped
-`SupervisorProcessId` token. Stop results describe the supervisor API outcome
-and must not claim that a process has exited until the manager observes that
-state.
+values. `parent_process_id` and `start_time_ticks` carry OS ancestry observations
+when the platform exposes them; the TUI links a child only when the parent PID
+is present and the parent's known start time precedes the child's. Missing or
+ambiguous identity data leaves the row at the root. These fields are never
+control identities. `pid` is display-only; all stop operations use the full
+supervisor-scoped `SupervisorProcessId` token. Stop results describe the
+supervisor API outcome and must not claim that a process has exited until the
+manager observes that state.
+
+The service snapshot includes `coordinatorProcess` with the actual service PID
+and executable path observed by the service. The coordinator is the host OS
+process root/context, not a managed child row. If the executable path cannot be
+read, `identityLimitation` states that `std::env::current_exe()` was unavailable;
+the PID remains the service's `std::process::id()`.
+
+FlowRun, task, post, attempt and worker identifiers are context attached to an
+observed process or shown in the separate logical-work panel. They are not
+process rows or ancestry nodes. Validated worker tool requests are exposed in
+`toolRequests` snapshots and `tool_activity_changed` events with request ID,
+tool name, attempt/generation, FlowRun/task context and lifecycle state. A tool
+request is an activity; it gains an OS child row only when a
+`supervisorProcessId` explicitly links it to a process in the observed process
+registry. No process is inferred from a request or task label.
 
 Events:
 
 ```json
 {"version":1,"type":"process_changed","event_id":7,"process":{...}}
 {"version":1,"type":"process_removed","event_id":8,"process_id":"v1:<uuid>:<sequence>"}
-{"version":1,"type":"resync_required","event_id":9}
+{"version":1,"type":"tool_activity_changed","event_id":9,"activity":{"requestId":"tool-1","attemptId":"attempt-1","generation":2,"flowId":"flow-1","taskId":"task-3","toolName":"exec","status":"claimed","supervisorProcessId":null,"updatedAtMs":123}}
+{"version":1,"type":"resync_required","event_id":10}
 ```
 
 Error codes are `unsupported_version`, `invalid_request`, `unknown_process`,

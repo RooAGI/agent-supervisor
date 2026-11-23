@@ -2091,7 +2091,7 @@ impl SupervisorService {
                 "snapshot" => {
                     let processes = self.supervisor.managed_processes().into_iter().map(|process| json!({
                         "processId":process.supervisor_id.to_string(),"pid":process.process_id,"alive":process.alive,
-                        "executable":process.executable,"framework":process.framework,"runLabel":process.run_label,
+                        "executable":process.executable,"parentProcessId":process.parent_process_id,"startTimeTicks":process.start_time_ticks,"framework":process.framework,"runLabel":process.run_label,
                         "projectId":process.project_id,"flowRunId":process.flow_run_id,"taskId":process.task_id
                         ,"postId":process.post_id,"workerId":process.worker_id,"runtimeRunId":process.runtime_run_id
                     })).collect::<Vec<_>>();
@@ -2103,6 +2103,7 @@ impl SupervisorService {
                         let metadata = observed.map(|p|json!({"framework":p["framework"],"runLabel":p["runLabel"],"projectId":p["projectId"],"flowRunId":p["flowRunId"],"taskId":p["taskId"],"postId":p["postId"],"workerId":p["workerId"],"runtimeRunId":p["runtimeRunId"]})).unwrap_or(Value::Null);
                         let mut row = json!({"processId":coordinated.process_id,"runId":coordinated.run_id,"attemptId":coordinated.attempt_id,"alive":coordinated.alive,"exitStatus":coordinated.exit_status,"revision":coordinated.revision,"updatedAtMs":coordinated.updated_at_ms,
                             "pid":observed.map(|p|p["pid"].clone()),"executable":observed.map(|p|p["executable"].clone()),
+                            "parentProcessId":observed.map(|p|p["parentProcessId"].clone()),"startTimeTicks":observed.map(|p|p["startTimeTicks"].clone()),
                             "metadata":metadata});
                         if let Some(metadata) = row.get("metadata").and_then(Value::as_object).cloned() {
                             for (key, value) in metadata {
@@ -2115,7 +2116,7 @@ impl SupervisorService {
                         let id = observed["processId"].as_str().unwrap_or_default();
                         if seen_processes.insert(id.to_owned()) {
                             let metadata = json!({"framework":observed["framework"],"runLabel":observed["runLabel"],"projectId":observed["projectId"],"flowRunId":observed["flowRunId"],"taskId":observed["taskId"],"postId":observed["postId"],"workerId":observed["workerId"],"runtimeRunId":observed["runtimeRunId"]});
-                            let mut row = json!({"processId":id,"runId":null,"attemptId":null,"alive":observed["alive"],"exitStatus":null,"revision":0,"updatedAtMs":0,"pid":observed["pid"],"executable":observed["executable"],"metadata":metadata});
+                            let mut row = json!({"processId":id,"runId":null,"attemptId":null,"alive":observed["alive"],"exitStatus":null,"revision":0,"updatedAtMs":0,"pid":observed["pid"],"executable":observed["executable"],"parentProcessId":observed["parentProcessId"],"startTimeTicks":observed["startTimeTicks"],"metadata":metadata});
                             if let Some(metadata) =
                                 row.get("metadata").and_then(Value::as_object).cloned()
                             {
@@ -2137,6 +2138,14 @@ impl SupervisorService {
                     snapshot_value["workflowDispatch"] = self.workflow_dispatch_summary();
                     snapshot_value["workflowDispatchConfigured"] =
                         json!(self.workflow_dispatcher.is_some() || self.workflow_worker.is_some());
+                    let executable = std::env::current_exe()
+                        .ok()
+                        .map(|path| path.to_string_lossy().into_owned());
+                    snapshot_value["coordinatorProcess"] = json!({
+                        "pid": std::process::id(),
+                        "executable": executable,
+                        "identityLimitation": if executable.is_none() { Some("service executable path unavailable from std::env::current_exe()") } else { None::<&str> }
+                    });
                     let _ = out_tx.send(snapshot_value).await;
                 }
                 "revokeRole" => {
