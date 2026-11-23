@@ -196,6 +196,8 @@ the [run coordinator](docs/supervisor-coordinator.md), and the
 attaches to, and stops supervised processes. See the
 [terminal process manager](docs/tui.md).
 
+![Agent Supervisor terminal UI: the Supervisor's own process, one running RooAGI worker, and its Project's recent runs with their attempts](docs/assets/process-manager-tui.svg)
+
 ## Platform support
 
 | Capability | Linux | macOS | Windows |
