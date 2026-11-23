@@ -100,6 +100,37 @@ fn process_rows_use_pid_fallback_after_preferred_labels_and_keep_ancestry() {
 }
 
 #[test]
+fn terminal_runs_are_kept_in_recent_history_and_sorted_newest_first() {
+    let mut older = TuiRun { run_id: "older".into(), manager_id: "manager".into(), status: "succeeded".into(), context: json!({}), revision: 1, updated_at_ms: 10 };
+    older.context = json!({"taskId":"older-task"});
+    let newer = TuiRun { run_id: "newer".into(), manager_id: "manager".into(), status: "failed".into(), context: json!({"taskId":"newer-task"}), revision: 1, updated_at_ms: 20 };
+    let active = TuiRun { run_id: "active".into(), manager_id: "manager".into(), status: "running".into(), context: json!({"taskId":"active-task"}), revision: 1, updated_at_ms: 15 };
+    let view = View { runs: vec![older, newer, active], ..View::default() };
+    let text = screen(&view, WIDE);
+
+    assert!(text.contains("Active and nonterminal runs"), "{text}");
+    assert!(text.contains("Recent terminal runs"), "{text}");
+    assert!(text.find("active-task").unwrap() < text.find("newer-task").unwrap(), "{text}");
+    assert!(text.find("newer-task").unwrap() < text.find("older-task").unwrap(), "{text}");
+}
+
+#[test]
+fn exited_processes_are_hidden_from_the_live_manager_and_selection() {
+    let mut exited = process("old", 10, "old-task");
+    exited.alive = false;
+    let live = process("live", 20, "live-task");
+    let mut view = View { processes: vec![exited, live], can_control: true, ..View::default() };
+    let text = screen(&view, WIDE);
+
+    assert!(text.contains("managed OS processes (1)"), "{text}");
+    assert!(text.contains("live-task"), "{text}");
+    assert!(!text.contains("old-task"), "{text}");
+    assert_eq!(view.selected_process().unwrap().process_id, "live");
+    handle_key(&mut view, key(KeyCode::Char('s')), false);
+    assert_eq!(view.confirmation, Some(Confirmation::Stop("live".into())));
+}
+
+#[test]
 fn tool_requests_render_as_attempt_activity_and_do_not_create_process_rows() {
     let view = View {
         runs: vec![TuiRun { run_id: "run-1".into(), manager_id: "manager-1".into(), status: "running".into(), context: json!({"flowRunId":"flow-1","taskId":"task-4"}), revision: 1, updated_at_ms: 10 }],

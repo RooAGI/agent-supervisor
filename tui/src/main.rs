@@ -83,14 +83,16 @@ impl View {
     }
 
     fn clamp_selection(&mut self) {
-        self.selected = self.selected.min(self.processes.len().saturating_sub(1));
+        self.selected = self.selected.min(self.processes.iter().filter(|process| process.alive).count().saturating_sub(1));
     }
 
-    /// The selected process, in display order.
+    /// The selected live process, in display order.
     fn selected_process(&self) -> Option<&TuiProcess> {
         display_order(&self.processes)
-            .get(self.selected)
-            .map(|index| &self.processes[*index])
+            .into_iter()
+            .filter(|index| self.processes[*index].alive)
+            .nth(self.selected)
+            .map(|index| &self.processes[index])
     }
 }
 
@@ -592,7 +594,7 @@ fn handle_key(view: &mut View, key: KeyEvent, request_pending: bool) -> KeyOutco
                 if view
                     .processes
                     .iter()
-                    .any(|process| process.process_id == process_id)
+                    .any(|process| process.process_id == process_id && process.alive)
                 {
                     KeyOutcome::Stop(process_id)
                 } else {
@@ -612,7 +614,7 @@ fn handle_key(view: &mut View, key: KeyEvent, request_pending: bool) -> KeyOutco
         KeyCode::Esc if view.detail => view.detail = false,
         KeyCode::Esc => return KeyOutcome::Quit,
         KeyCode::Char('j') | KeyCode::Down => {
-            view.selected = (view.selected + 1).min(view.processes.len().saturating_sub(1));
+            view.selected = (view.selected + 1).min(view.processes.iter().filter(|process| process.alive).count().saturating_sub(1));
             view.detail = false;
         }
         KeyCode::Char('k') | KeyCode::Up => {
@@ -636,7 +638,7 @@ fn handle_key(view: &mut View, key: KeyEvent, request_pending: bool) -> KeyOutco
         KeyCode::Char('a') => {
             if !view.can_control {
                 view.notice = "This TUI connection has view-only permission.".into();
-            } else if view.processes.is_empty() {
+            } else if !view.processes.iter().any(|process| process.alive) {
                 view.notice = "No managed processes are running.".into();
             } else {
                 view.confirmation = Some(Confirmation::StopAll);
@@ -759,7 +761,8 @@ fn dim(text: String) -> Span<'static> {
 
 /// Draws the whole screen for `view`.
 fn render(frame: &mut Frame, view: &View) {
-    let process_rows = view.processes.len().clamp(1, 12) as u16;
+    let live_process_count = view.processes.iter().filter(|process| process.alive).count();
+    let process_rows = live_process_count.clamp(1, 12) as u16;
     let [header, processes, work, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(process_rows + 3),
@@ -823,8 +826,9 @@ fn render_processes(frame: &mut Frame, view: &View, area: Rect) {
             )
         })
         .unwrap_or_else(|| "service identity unavailable: protocol did not provide it".into());
-    let title = format!("managed OS processes ({}) · {root}", view.processes.len());
-    if view.processes.is_empty() {
+    let live_process_count = view.processes.iter().filter(|process| process.alive).count();
+    let title = format!("managed OS processes ({live_process_count}) · {root}");
+    if live_process_count == 0 {
         frame.render_widget(
             Paragraph::new(Line::from(dim(
                 "  No processes are currently managed.".into()
@@ -836,6 +840,7 @@ fn render_processes(frame: &mut Frame, view: &View, area: Rect) {
     }
     let rows = display_order(&view.processes)
         .into_iter()
+        .filter(|index| view.processes[*index].alive)
         .enumerate()
         .map(|(position, index)| {
             let process = &view.processes[index];
@@ -882,6 +887,11 @@ fn render_processes(frame: &mut Frame, view: &View, area: Rect) {
     frame.render_stateful_widget(table, area, &mut state);
 }
 
+/// Terminal run statuses follow `ExecutionStatus::terminal` in the coordinator.
+fn run_is_terminal(run: &TuiRun) -> bool {
+    matches!(run.status.as_str(), "succeeded" | "failed" | "cancelled")
+}
+
 /// The runs, their activities and attempts, and the Supervisor FlowRuns.
 fn work_lines(view: &View) -> Vec<Line<'static>> {
     let heading = |text: &str| Line::from(text.to_owned()).bold().fg(ACCENT);
@@ -902,7 +912,21 @@ fn work_lines(view: &View) -> Vec<Line<'static>> {
             dim("  No runs are currently registered.".into()),
         ));
     }
-    for run in &view.runs {
+    let mut active_runs = view.runs.iter().filter(|run| !run_is_terminal(run)).collect::<Vec<_>>();
+    let mut recent_runs = view.runs.iter().filter(|run| run_is_terminal(run)).collect::<Vec<_>>();
+    recent_runs.sort_by_key(|run| std::cmp::Reverse(run.updated_at_ms));
+
+    lines.push(heading("Active and nonterminal runs"));
+    if active_runs.is_empty() {
+        lines.push(Line::from(dim("  No active or nonterminal runs.".into())));
+    }
+    let ordered_runs = active_runs.drain(..).chain(recent_runs.iter().copied()).collect::<Vec<_>>();
+    let mut history_heading_written = false;
+    for run in ordered_runs {
+        if run_is_terminal(run) && !history_heading_written {
+            lines.push(heading("Recent terminal runs"));
+            history_heading_written = true;
+        }
         let linked_framework = view
             .activities
             .iter()
