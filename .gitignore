@@ -24,3 +24,9 @@ target
 /site/
 .env
 .lint-ai/
+
+# Local workspace files
+.DS_Store
+.codex/config.toml
+.lint-ai-cache/
+.membrick/
