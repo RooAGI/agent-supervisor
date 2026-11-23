@@ -57,6 +57,49 @@ fn process_tree_uses_parent_pid_and_non_reused_start_time() {
 }
 
 #[test]
+fn process_rows_use_pid_fallback_after_preferred_labels_and_keep_ancestry() {
+    let mut parent = process("parent", 41, "task-parent");
+    parent.run_label = None;
+    parent.executable = None;
+    parent.task_id = None;
+    parent.worker_id = None;
+    parent.start_time_ticks = Some(100);
+
+    let mut child = process("child", 42, "task-child");
+    child.parent_process_id = Some(41);
+    child.start_time_ticks = Some(200);
+    child.run_label = None;
+    child.executable = None;
+    child.task_id = None;
+    child.worker_id = None;
+
+    let mut run_labeled = process("run-labeled", 43, "task-run");
+    run_labeled.run_label = Some("preferred run label".into());
+    run_labeled.executable = Some("/bin/worker".into());
+
+    let mut executable_labeled = process("executable-labeled", 44, "task-exec");
+    executable_labeled.run_label = None;
+    executable_labeled.executable = Some("/bin/executable-only".into());
+
+    let view = View {
+        processes: vec![child, parent, run_labeled, executable_labeled],
+        ..View::default()
+    };
+    let text = screen(&view, WIDE);
+
+    assert!(text.contains("managed · PID 41"), "{text}");
+    let parent_row = text.lines().find(|line| line.contains("managed · PID 41")).unwrap();
+    let child_row = text.lines().find(|line| line.contains("managed · PID 42")).unwrap();
+    assert!(
+        child_row.find("managed · PID 42").unwrap() > parent_row.find("managed · PID 41").unwrap(),
+        "{text}"
+    );
+    assert!(text.contains("preferred run label"), "{text}");
+    assert!(text.contains("/bin/executable-only"), "{text}");
+    assert!(!text.contains("unknown"), "{text}");
+}
+
+#[test]
 fn tool_requests_render_as_attempt_activity_and_do_not_create_process_rows() {
     let view = View {
         runs: vec![TuiRun { run_id: "run-1".into(), manager_id: "manager-1".into(), status: "running".into(), context: json!({"flowRunId":"flow-1","taskId":"task-4"}), revision: 1, updated_at_ms: 10 }],

@@ -843,7 +843,8 @@ fn render_processes(frame: &mut Frame, view: &View, area: Rect) {
                 .run_label
                 .as_deref()
                 .or(process.executable.as_deref())
-                .unwrap_or("unknown");
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("PID {}", process.pid));
             let role = if process.worker_id.is_some() || process.task_id.is_some() {
                 "worker"
             } else {
