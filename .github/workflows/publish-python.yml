@@ -23,6 +23,7 @@ jobs:
       - name: Align package metadata with the release tag
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
+        shell: bash
         run: |
           python - <<'PY'
           import os
