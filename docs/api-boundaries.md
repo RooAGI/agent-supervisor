@@ -95,7 +95,7 @@ period by default. Override them per call with
 
 ## Install
 
-The framework run adapters are in the current 0.3.3 repository source. Install
+The framework run adapters are in the current 0.3.4 repository source. Install
 the adapter from a checkout as shown in its section below. The table lists
 each framework's SDK dependency:
 
