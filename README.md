@@ -248,8 +248,9 @@ Read the [adapter contract](docs/openshell.md) before you experiment with it.
 
 ## Releases
 
-The latest release is **0.3.1**, which adds the persistent Supervisor service
-and its coordinator. See the [release notes](docs/releases/) for every version.
+The latest release is **0.3.4**. The persistent Supervisor service and its
+coordinator were introduced in 0.3.1. See the [release notes](docs/releases/)
+for release history.
 
 ## Contributing
 

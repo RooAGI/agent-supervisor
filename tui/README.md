@@ -10,22 +10,24 @@ Build it with:
 cargo build --release --manifest-path tui/Cargo.toml
 ```
 
-The executable needs an attached interactive terminal. On Unix it opens
-`/dev/tty`; on Windows it opens the current console as `CONIN$` and `CONOUT$`.
-It uses ANSI screen clearing and line-based input, so input is entered with
-Return. Process changes appear as supervisor events arrive; the list is also
-refreshed once per second to recover from missed events.
+The screen is drawn with ratatui and keys are read with crossterm. The
+interactive UI needs an attached terminal: on Unix it uses `/dev/tty`, on
+Windows the console. Keys act at once, without Return:
 
-Commands:
-
-- `j` / `k`: select the next / previous process
-- `i`: show or hide details for the selected process
-- `s`: request a stop for the selected process (asks for confirmation)
-- `a`: request shutdown of all managed processes (asks for confirmation)
+- `j` / `↓`, `k` / `↑`: select the next / previous process
+- `i` / `Enter`: show or hide details for the selected process
+- `s`: stop the selected process (press `y` to confirm)
+- `a`: stop all managed processes (press `y` to confirm)
+- `PgDn` / `PgUp`: scroll the runs and FlowRuns panel
 - `r`: refresh the process list
 - `?`: show help
-- `q`: exit the TUI
+- `Esc`: close details, or quit
+- `q` / `Ctrl-C`: exit the TUI
 
-On Unix, launching without a controlling terminal fails with a clear error.
-On Windows, an interactive console is required; redirected protocol pipes stay
-separate from the console handles.
+Process changes appear as supervisor events arrive; the list is also refreshed
+once per second to recover from missed events. Launching without a terminal
+fails with a clear error.
+
+`--snapshot` renders one frame to standard output without a terminal, as text
+or SVG, from the live Supervisor (`--service-socket` and `--token-file`) or a
+saved state (`--from FILE`). See [the TUI guide](../docs/tui.md#snapshot-without-a-terminal).

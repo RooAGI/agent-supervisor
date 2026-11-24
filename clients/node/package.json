@@ -1,6 +1,6 @@
 {
   "name": "@rooagi/agent-supervisor",
-  "version": "0.3.2",
+  "version": "0.3.4",
   "description": "Embedded and service-based process supervision for Node.js agent applications.",
   "license": "Apache-2.0",
   "repository": {

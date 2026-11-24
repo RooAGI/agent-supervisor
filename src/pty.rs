@@ -232,6 +232,7 @@ impl PtySession {
             started_at: self.started_at,
             finished_at: SystemTime::now(),
             termination,
+            output_incomplete: false,
         }
     }
 }

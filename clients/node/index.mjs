@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { PassThrough, Writable } from 'node:stream'
 import { EventEmitter } from 'node:events'
 
-const MAX_FRAME_BYTES = 1024 * 1024
+const MAX_FRAME_BYTES = 16 * 1024 * 1024
 
 /** Client for the user-owned Agent Supervisor Unix socket service. */
 export class SupervisorClient extends EventEmitter {
@@ -51,12 +51,12 @@ export class SupervisorClient extends EventEmitter {
     this.socket.once('connect', () => this.socket.write(`${JSON.stringify({ type: 'auth', role, token })}\n`))
   }
 
-  async start({ executable, args = [], cwd, env, metadata, policy, attemptId, generation }) {
+  async start({ executable, args = [], cwd, env, metadata, policy, attemptId, generation, stopProcessGroupOnExit }) {
     if (this.role !== 'control') throw new Error('control credential required to start processes')
     if (!policy) throw new Error('an explicit Supervisor policy is required')
     if ((attemptId === undefined) !== (generation === undefined)) throw new Error('attemptId and generation must be provided together')
     const handle = new SupervisorProcessHandle(this)
-    const started = await this.#startRequest({ executable, args, cwd, metadata, policy, attemptId, generation }, handle)
+    const started = await this.#startRequest({ executable, args, cwd, metadata, policy, attemptId, generation, stopProcessGroupOnExit }, handle)
     handle._setOutputToken(started.outputToken)
     return handle
   }
@@ -300,7 +300,7 @@ export class SupervisorClient extends EventEmitter {
     return handle
   }
 
-  #startRequest({ executable, args = [], cwd, metadata, policy, attemptId, generation }, handle) {
+  #startRequest({ executable, args = [], cwd, metadata, policy, attemptId, generation, stopProcessGroupOnExit }, handle) {
     if ((attemptId === undefined) !== (generation === undefined)) return Promise.reject(new Error('attemptId and generation must be provided together'))
     const requestId = this.#requestId()
     return new Promise((resolve, reject) => {
@@ -309,7 +309,8 @@ export class SupervisorClient extends EventEmitter {
         type: 'start', requestId,
         command: { executable, args, ...(cwd ? { cwd } : {}) },
         metadata: metadata ?? {}, policy,
-        ...(attemptId !== undefined ? { attemptId, generation } : {})
+        ...(attemptId !== undefined ? { attemptId, generation } : {}),
+        ...(stopProcessGroupOnExit ? { stopProcessGroupOnExit: true } : {})
       })
     })
   }
@@ -359,13 +360,13 @@ export class SupervisorClient extends EventEmitter {
   #send(value) {
     if (this.socket.destroyed) throw new Error('Supervisor service is disconnected')
     const frame = `${JSON.stringify(value)}\n`
-    if (Buffer.byteLength(frame) > MAX_FRAME_BYTES) throw new Error('Supervisor request exceeds the 1 MiB frame limit')
+    if (Buffer.byteLength(frame) > MAX_FRAME_BYTES) throw new Error('Supervisor request exceeds the 16 MiB frame limit')
     this.socket.write(frame)
   }
   #onData(chunk) {
     this.buffer += chunk
     if (Buffer.byteLength(this.buffer) > MAX_FRAME_BYTES && !this.buffer.includes('\n')) {
-      this.#fail(new Error('Supervisor response exceeds the 1 MiB frame limit'))
+      this.#fail(new Error('Supervisor response exceeds the 16 MiB frame limit'))
       return
     }
     for (;;) {
@@ -373,7 +374,7 @@ export class SupervisorClient extends EventEmitter {
       if (end < 0) break
       const line = this.buffer.slice(0, end)
       this.buffer = this.buffer.slice(end + 1)
-      if (Buffer.byteLength(line) + 1 > MAX_FRAME_BYTES) { this.#fail(new Error('Supervisor response exceeds the 1 MiB frame limit')); return }
+      if (Buffer.byteLength(line) + 1 > MAX_FRAME_BYTES) { this.#fail(new Error('Supervisor response exceeds the 16 MiB frame limit')); return }
       let message
       try { message = JSON.parse(line) } catch (error) { this.#fail(error); return }
       if (message.type === 'ready') { this.readyResolve(); continue }

@@ -249,6 +249,10 @@ pub struct ProcessReceipt {
     pub started_at: SystemTime,
     pub finished_at: SystemTime,
     pub termination: TerminationReason,
+    /// The exit was reported before all output was read: something the
+    /// process left running still held its output open past the drain grace.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub output_incomplete: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

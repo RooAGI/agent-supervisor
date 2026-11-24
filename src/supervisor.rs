@@ -1571,7 +1571,19 @@ impl SupervisedChild {
             started_at: self.started_at,
             finished_at: SystemTime::now(),
             termination,
+            output_incomplete: false,
         }
+    }
+
+    /// Wait for the process itself to exit, leaving its output streams alone.
+    pub(crate) async fn wait_exit(&mut self) -> Result<ProcessReceipt, SandboxError> {
+        let status = self.child.wait().await.map_err(SandboxError::execution)?;
+        Ok(self.complete(exit_reason(&status)))
+    }
+
+    /// The process group container, to stop what the process left running.
+    pub(crate) fn container(&self) -> Arc<ProcessContainer> {
+        Arc::clone(&self.container)
     }
 
     fn complete(&mut self, termination: TerminationReason) -> ProcessReceipt {
@@ -2039,6 +2051,7 @@ pub(crate) async fn execute_with_tap(
         started_at,
         finished_at: SystemTime::now(),
         termination: output.termination.clone(),
+        output_incomplete: false,
     }));
     output
 }

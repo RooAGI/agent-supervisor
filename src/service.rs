@@ -22,7 +22,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{broadcast, mpsc, watch};
 
-const MAX_FRAME: usize = 1024 * 1024;
+const MAX_FRAME: usize = 16 * 1024 * 1024;
 const EVENT_HISTORY: usize = 256;
 const DEFAULT_SESSION_TTL: Duration = Duration::from_secs(8 * 60 * 60);
 const MAX_SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
@@ -2091,7 +2091,7 @@ impl SupervisorService {
                 "snapshot" => {
                     let processes = self.supervisor.managed_processes().into_iter().map(|process| json!({
                         "processId":process.supervisor_id.to_string(),"pid":process.process_id,"alive":process.alive,
-                        "executable":process.executable,"framework":process.framework,"runLabel":process.run_label,
+                        "executable":process.executable,"parentProcessId":process.parent_process_id,"startTimeTicks":process.start_time_ticks,"framework":process.framework,"runLabel":process.run_label,
                         "projectId":process.project_id,"flowRunId":process.flow_run_id,"taskId":process.task_id
                         ,"postId":process.post_id,"workerId":process.worker_id,"runtimeRunId":process.runtime_run_id
                     })).collect::<Vec<_>>();
@@ -2103,6 +2103,7 @@ impl SupervisorService {
                         let metadata = observed.map(|p|json!({"framework":p["framework"],"runLabel":p["runLabel"],"projectId":p["projectId"],"flowRunId":p["flowRunId"],"taskId":p["taskId"],"postId":p["postId"],"workerId":p["workerId"],"runtimeRunId":p["runtimeRunId"]})).unwrap_or(Value::Null);
                         let mut row = json!({"processId":coordinated.process_id,"runId":coordinated.run_id,"attemptId":coordinated.attempt_id,"alive":coordinated.alive,"exitStatus":coordinated.exit_status,"revision":coordinated.revision,"updatedAtMs":coordinated.updated_at_ms,
                             "pid":observed.map(|p|p["pid"].clone()),"executable":observed.map(|p|p["executable"].clone()),
+                            "parentProcessId":observed.map(|p|p["parentProcessId"].clone()),"startTimeTicks":observed.map(|p|p["startTimeTicks"].clone()),
                             "metadata":metadata});
                         if let Some(metadata) = row.get("metadata").and_then(Value::as_object).cloned() {
                             for (key, value) in metadata {
@@ -2115,7 +2116,7 @@ impl SupervisorService {
                         let id = observed["processId"].as_str().unwrap_or_default();
                         if seen_processes.insert(id.to_owned()) {
                             let metadata = json!({"framework":observed["framework"],"runLabel":observed["runLabel"],"projectId":observed["projectId"],"flowRunId":observed["flowRunId"],"taskId":observed["taskId"],"postId":observed["postId"],"workerId":observed["workerId"],"runtimeRunId":observed["runtimeRunId"]});
-                            let mut row = json!({"processId":id,"runId":null,"attemptId":null,"alive":observed["alive"],"exitStatus":null,"revision":0,"updatedAtMs":0,"pid":observed["pid"],"executable":observed["executable"],"metadata":metadata});
+                            let mut row = json!({"processId":id,"runId":null,"attemptId":null,"alive":observed["alive"],"exitStatus":null,"revision":0,"updatedAtMs":0,"pid":observed["pid"],"executable":observed["executable"],"parentProcessId":observed["parentProcessId"],"startTimeTicks":observed["startTimeTicks"],"metadata":metadata});
                             if let Some(metadata) =
                                 row.get("metadata").and_then(Value::as_object).cloned()
                             {
@@ -2137,6 +2138,14 @@ impl SupervisorService {
                     snapshot_value["workflowDispatch"] = self.workflow_dispatch_summary();
                     snapshot_value["workflowDispatchConfigured"] =
                         json!(self.workflow_dispatcher.is_some() || self.workflow_worker.is_some());
+                    let executable = std::env::current_exe()
+                        .ok()
+                        .map(|path| path.to_string_lossy().into_owned());
+                    snapshot_value["coordinatorProcess"] = json!({
+                        "pid": std::process::id(),
+                        "executable": executable,
+                        "identityLimitation": if executable.is_none() { Some("service executable path unavailable from std::env::current_exe()") } else { None::<&str> }
+                    });
                     let _ = out_tx.send(snapshot_value).await;
                 }
                 "revokeRole" => {
@@ -2416,7 +2425,15 @@ impl SupervisorService {
             }
             self.complete_reservation(&coordinator_request_id);
         }
-        let stream = child.into_event_stream().map_err(|e| e.to_string())?;
+        let mut stream = child.into_event_stream().map_err(|e| e.to_string())?;
+        // One-shot commands ask for what they leave running to be stopped
+        // when they exit, so nothing outlives them unsupervised.
+        stream.stop_process_group_on_exit(
+            request
+                .get("stopProcessGroupOnExit")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        );
         let (events, _) = broadcast::channel(128);
         let history = Arc::new(Mutex::new(VecDeque::new()));
         let (input, mut input_rx) = mpsc::channel(64);
@@ -2437,7 +2454,56 @@ impl SupervisorService {
                         None => {},
                     },
                     next = stream.next() => match next {
-                        Ok(Some(event)) => {
+                        // The stream ends with an error when the process broke a
+                        // limit (its output passed the policy's output bytes); it
+                        // has already stopped the process and kept the receipt.
+                        // Report that exit, or a client waits for it forever.
+                        Ok(Some(_)) | Err(_) => {
+                            let event = match next {
+                                Ok(Some(event)) => event,
+                                Ok(None) => break,
+                                Err(error) => {
+                                    let failure = json!({
+                                        "type":"error",
+                                        "processId":id.to_string(),
+                                        "code":error.code(),
+                                        "message":error.message(),
+                                        "metadata":{
+                                            "framework":event_metadata.framework(),
+                                            "runLabel":event_metadata.run_label(),
+                                            "projectId":event_metadata.project_id(),
+                                            "flowRunId":event_metadata.flow_run_id(),
+                                            "taskId":event_metadata.task_id(),
+                                            "postId":event_metadata.post_id(),
+                                            "workerId":event_metadata.worker_id(),
+                                            "runtimeRunId":event_metadata.runtime_run_id()
+                                        }
+                                    });
+                                    {
+                                        let mut h = history.lock().unwrap();
+                                        h.push_back(failure.clone());
+                                        while h.len() > EVENT_HISTORY { h.pop_front(); }
+                                    }
+                                    let _ = events.send(failure);
+                                    match stream.wait().await {
+                                        Ok(mut receipt) => {
+                                            // The process may die of the closed pipe
+                                            // first; the limit is the real reason.
+                                            match error.code_kind() {
+                                                crate::SandboxErrorCode::OutputTooLarge => {
+                                                    receipt.termination = crate::TerminationReason::StdoutLimitExceeded
+                                                }
+                                                crate::SandboxErrorCode::StderrTooLarge => {
+                                                    receipt.termination = crate::TerminationReason::StderrLimitExceeded
+                                                }
+                                                _ => {}
+                                            }
+                                            ProcessEvent::Exited(receipt)
+                                        }
+                                        Err(_) => break,
+                                    }
+                                },
+                            };
                             let value = event_json(id, event, &event_metadata);
                             if let Some(value) = value {
                                 {
@@ -2853,7 +2919,7 @@ async fn read_frame_within<R: tokio::io::AsyncBufRead + Unpin>(
     if n > MAX_FRAME {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "frame exceeds 1 MiB",
+            "frame exceeds 16 MiB",
         ));
     }
     Ok(())
@@ -3557,6 +3623,100 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<Value>(&line).unwrap()["code"],
             "unauthorized"
+        );
+    }
+
+    // Found live 2026-11-22: a one-shot command that left a server running
+    // was never reported as exited, and the server outlived it unsupervised.
+    #[tokio::test]
+    async fn a_process_over_its_output_limit_is_reported_as_exited() {
+        // Found live: a worker's `cat` of a 13 MB file passed the 1 MiB limit;
+        // the process was stopped but no exit was sent, so the client hung.
+        let service = SupervisorService::new(
+            Arc::new(Supervisor::new()),
+            "v".repeat(32),
+            "c".repeat(32),
+            "t".repeat(32),
+        )
+        .unwrap();
+        let (mut reader, mut writer) = connect(&service, "control", &"c".repeat(32)).await;
+        let mut policy = serde_json::to_value(crate::Policy::default()).unwrap();
+        policy["limits"]["outputBytes"] = json!(64 * 1024);
+        let request = json!({"type":"start","requestId":"s1","command":{"executable":"/bin/sh","args":["-c","head -c 2000000 /dev/zero"]},"policy":policy,"stopProcessGroupOnExit":true});
+        write_json(&mut writer, &request).await.unwrap();
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&line).unwrap()["type"],
+            "started"
+        );
+        let mut exited = None;
+        while exited.is_none() {
+            line.clear();
+            tokio::time::timeout(Duration::from_secs(5), reader.read_line(&mut line))
+                .await
+                .expect("the exit is reported after the output limit")
+                .unwrap();
+            let event: Value = serde_json::from_str(&line).unwrap();
+            if event["type"] == "exited" {
+                exited = Some(event);
+            }
+        }
+        assert_eq!(
+            exited.unwrap()["receipt"]["termination"],
+            json!("StdoutLimitExceeded")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_start_asking_to_stop_its_process_group_exits_and_leaves_nothing_running() {
+        let service = SupervisorService::new(
+            Arc::new(Supervisor::new()),
+            "v".repeat(32),
+            "c".repeat(32),
+            "t".repeat(32),
+        )
+        .unwrap();
+        let (mut reader, mut writer) = connect(&service, "control", &"c".repeat(32)).await;
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("pid");
+        let script = format!(
+            "sleep 30 & echo $! > '{}'; echo started",
+            pid_file.display()
+        );
+        let request = json!({"type":"start","requestId":"s1","command":{"executable":"/bin/sh","args":["-c",script]},"policy":crate::Policy::default(),"stopProcessGroupOnExit":true});
+        write_json(&mut writer, &request).await.unwrap();
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&line).unwrap()["type"],
+            "started"
+        );
+        let mut exited = None;
+        while exited.is_none() {
+            line.clear();
+            tokio::time::timeout(Duration::from_secs(5), reader.read_line(&mut line))
+                .await
+                .expect("the exit is reported while the background process holds the output")
+                .unwrap();
+            let event: Value = serde_json::from_str(&line).unwrap();
+            if event["type"] == "exited" {
+                exited = Some(event);
+            }
+        }
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while unsafe { libc::kill(pid, 0) } == 0 && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_ne!(
+            unsafe { libc::kill(pid, 0) },
+            0,
+            "the background process was stopped"
         );
     }
 
@@ -4384,10 +4544,29 @@ mod tests {
         write_json(&mut write, &start_request).await.unwrap();
         drop(write);
         drop(reader);
-        tokio::time::sleep(Duration::from_millis(100)).await;
 
-        let retry = call(&socket, "control", &control, start_request.clone()).await;
-        assert_eq!(retry["type"], "started", "retry response: {retry}");
+        // The process can appear in the supervisor snapshot just before its
+        // durable launch reservation is completed. Retry the same idempotent
+        // request until that receipt is available instead of relying on a
+        // fixed delay.
+        let retry = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let retry = call(&socket, "control", &control, start_request.clone()).await;
+                if retry["type"] == "started" {
+                    break retry;
+                }
+                assert_eq!(retry["type"], "error", "retry response: {retry}");
+                assert_eq!(retry["code"], "start_failed", "retry response: {retry}");
+                assert!(retry["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("reserved with an unknown outcome"));
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("original launch should finish before retry succeeds");
+
         let process_id = retry["processId"].as_str().unwrap().to_owned();
         let snapshot = call(
             &socket,

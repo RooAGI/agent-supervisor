@@ -447,6 +447,19 @@ impl ProcessContainer {
         }
     }
 
+    /// Kill what is left of the process group after its leader has exited:
+    /// processes the leader started in the background. The leader is already
+    /// reaped, so this does not verify the leader's identity; a process group
+    /// ID cannot be reused while any member of the group is alive.
+    #[allow(unreachable_code)]
+    pub(crate) fn kill_remaining_group(&self) -> io::Result<()> {
+        #[cfg(windows)]
+        return self.job.terminate();
+        #[cfg(unix)]
+        return self.signal_unix(libc::SIGKILL);
+        Ok(())
+    }
+
     #[cfg(unix)]
     fn signal_unix(&self, signal: i32) -> io::Result<()> {
         let process_id = *self.process_id.lock().unwrap_or_else(|p| p.into_inner());

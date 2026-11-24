@@ -13,10 +13,13 @@ cargo build --manifest-path tui/Cargo.toml --release
 ```
 
 The binary is written to `tui/target/release/agent-supervisor-tui` (append
-`.exe` on Windows). The TUI needs an attached terminal. On Unix it opens
-`/dev/tty`; on Windows it opens `CONIN$` and `CONOUT$`. It uses standard input
-and output for the supervisor protocol, so those streams must not be redirected
-away from the parent supervisor.
+`.exe` on Windows). The screen is drawn with [ratatui](https://ratatui.rs) and
+keys are read with [crossterm](https://github.com/crossterm-rs/crossterm). The
+interactive UI needs an attached terminal: on Unix it draws to and reads keys
+from `/dev/tty`; on Windows it uses the console. It uses standard input and
+output for the supervisor protocol, so those streams must not be redirected
+away from the parent supervisor. To render without a terminal, see
+[Snapshot without a terminal](#snapshot-without-a-terminal).
 
 ## Start it from Rust
 
@@ -60,19 +63,37 @@ dashboard, and confirms that stopping one leaves the other running.
 
 ## Use the dashboard
 
-The dashboard refreshes process information as jobs change. It displays the
-supervisor process ID, OS PID, executable, alive state, and optional framework
-and run labels supplied by the host application. Use these commands:
+The dashboard refreshes process information as jobs change. The Processes
+panel contains observed managed OS processes, keyed for control by their
+Supervisor process ID; it displays OS PID, executable, alive state and
+available framework/run labels. Rows form a tree only when the OS parent PID is
+registered and known start times show that the parent predates the child.
+Unknown ancestry stays at the root, and PID is display-only because it can be
+reused.
+
+The coordinator appears as a service root header with its observed service PID
+and executable. If the service cannot read its executable path, the TUI shows
+the exact `current_exe()` limitation; coordinator state is not a managed child
+row. FlowRun, task, post, attempt and worker IDs are contextual labels and
+records in the coordinated-work panel, never standalone OS process rows.
+Validated worker tool requests appear under their attempt with request ID, tool
+name and lifecycle state. A tool request gains an OS child row only when an
+observed Supervisor process ID is explicitly linked to it. Keys act at once; there is
+no need to press Return:
 
 | Key | Action |
 |---|---|
-| `j` / `k` | Select the next or previous process |
-| `i` | Show or hide details for the selected process |
-| `s` | Request a stop for the selected process; type `y` to confirm |
-| `a` | Request a stop for all managed processes; type `y` to confirm |
+| `j` / `↓`, `k` / `↑` | Select the next or previous process |
+| `i` / `Enter` | Show or hide details for the selected process |
+| `s` | Stop the selected process; press `y` to confirm, any other key cancels |
+| `a` | Stop all managed processes; press `y` to confirm, any other key cancels |
+| `PgDn` / `PgUp` | Scroll the runs and FlowRuns panel |
 | `r` | Refresh the list |
-| `?` | Show help |
-| `q` | Quit the TUI |
+| `?` | Show help; any key closes it |
+| `Esc` | Close details, or quit |
+| `q` / `Ctrl-C` | Quit the TUI |
+
+A `view` role connection shows the same screen without the stop keys.
 
 To label work, use `ManagedProcessMetadata` with
 `Supervisor::start_with_metadata` or
@@ -80,6 +101,30 @@ To label work, use `ManagedProcessMetadata` with
 available and leave the labels empty. Labels are descriptive; they do not
 change process identity or grant control. The library limits each label to
 128 UTF-8 bytes and rejects terminal control characters.
+
+## Snapshot without a terminal
+
+`--snapshot` draws one frame of the dashboard and prints it to standard
+output, then exits. It needs no terminal, so a script, a CI job or an agent
+can run it, for example to produce a screenshot for documentation:
+
+```bash
+# The live Supervisor, read over its service socket (Unix):
+agent-supervisor-tui --snapshot \
+  --service-socket /path/to/supervisor.sock --token-file /path/to/view.token \
+  --size 120x30 --format svg > dashboard.svg
+
+# A saved state: a JSON object with the processes, runs, activities,
+# attempts and flowRuns lists of a TUI snapshot response:
+agent-supervisor-tui --snapshot --from state.json --format text
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--size COLSxROWS` | `110x34` | Screen size to draw, at least `40x12` |
+| `--format text\|svg` | `text` | Plain text, or an SVG image with the dashboard's colors |
+
+The snapshot uses the same drawing code as the interactive dashboard.
 
 ## Control-channel permissions
 

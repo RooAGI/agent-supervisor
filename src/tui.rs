@@ -65,6 +65,10 @@ pub enum TuiResponse {
         attempts: Vec<TuiAttempt>,
         #[serde(default, rename = "flowRuns")]
         flow_runs: Vec<Value>,
+        #[serde(default, rename = "coordinatorProcess")]
+        coordinator_process: Option<TuiCoordinatorProcess>,
+        #[serde(default)]
+        tool_requests: Vec<TuiToolActivity>,
     },
     #[serde(rename = "processes")]
     Processes {
@@ -79,6 +83,16 @@ pub enum TuiResponse {
         attempts: Vec<TuiAttempt>,
         #[serde(default, rename = "flowRuns")]
         flow_runs: Vec<Value>,
+        #[serde(default, rename = "coordinatorProcess")]
+        coordinator_process: Option<TuiCoordinatorProcess>,
+        #[serde(default)]
+        tool_requests: Vec<TuiToolActivity>,
+    },
+    #[serde(rename = "tool_activity_changed")]
+    ToolActivityChanged {
+        version: u8,
+        event_id: u64,
+        activity: TuiToolActivity,
     },
     #[serde(rename = "process_changed")]
     ProcessChanged {
@@ -114,6 +128,28 @@ pub enum TuiResponse {
         code: String,
         message: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TuiCoordinatorProcess {
+    pub pid: u32,
+    pub executable: Option<String>,
+    pub identity_limitation: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TuiToolActivity {
+    pub request_id: String,
+    pub attempt_id: String,
+    pub generation: u64,
+    pub flow_id: String,
+    pub task_id: String,
+    pub tool_name: String,
+    pub status: String,
+    pub supervisor_process_id: Option<String>,
+    pub updated_at_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,6 +198,12 @@ pub struct TuiProcess {
     pub process_id: String,
     pub pid: u32,
     pub alive: bool,
+    /// OS parent PID observed for this process, when the platform exposes it.
+    #[serde(default)]
+    pub parent_process_id: Option<u32>,
+    /// OS process start time used to guard ancestry against PID reuse.
+    #[serde(default)]
+    pub start_time_ticks: Option<u64>,
     pub executable: Option<String>,
     pub framework: Option<String>,
     pub run_label: Option<String>,
@@ -192,6 +234,8 @@ impl From<&ManagedProcessInfo> for TuiProcess {
             process_id: process.supervisor_id.to_string(),
             pid: process.process_id,
             alive: process.alive,
+            parent_process_id: process.parent_process_id,
+            start_time_ticks: process.start_time_ticks,
             executable: process
                 .executable
                 .as_ref()
@@ -448,6 +492,8 @@ async fn serve_inner<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
                         activities: Vec::new(),
                         attempts: Vec::new(),
                         flow_runs: Vec::new(),
+                        coordinator_process: None,
+                        tool_requests: Vec::new(),
                     },
                 )
                 .await?;
@@ -468,6 +514,8 @@ async fn serve_inner<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
                         activities: Vec::new(),
                         attempts: Vec::new(),
                         flow_runs: Vec::new(),
+                        coordinator_process: None,
+                        tool_requests: Vec::new(),
                     },
                 )
                 .await?;
@@ -668,6 +716,8 @@ mod tests {
                 process_id: "v1:supervisor:1".into(),
                 pid: 42,
                 alive: true,
+                parent_process_id: Some(7),
+                start_time_ticks: Some(900),
                 executable: Some("/usr/bin/agent".into()),
                 framework: Some("LangGraph".into()),
                 run_label: Some("support-agent".into()),

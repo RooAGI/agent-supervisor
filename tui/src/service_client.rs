@@ -1,5 +1,5 @@
 use agent_supervisor::tui::{
-    read_frame, write_frame, TuiActivity, TuiAttempt, TuiProcess, TuiRequest, TuiResponse, TuiRun,
+    read_frame, write_frame, TuiActivity, TuiAttempt, TuiCoordinatorProcess, TuiProcess, TuiRequest, TuiResponse, TuiRun, TuiToolActivity,
     TuiStopOutcome, PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
@@ -12,7 +12,7 @@ use tokio::io::{
 use tokio::net::UnixStream;
 use tokio::task::JoinHandle;
 
-const MAX_SERVICE_FRAME: usize = 1024 * 1024;
+const MAX_SERVICE_FRAME: usize = 16 * 1024 * 1024;
 
 enum Pending {
     Snapshot { tui_id: u64, subscribe: bool },
@@ -133,6 +133,8 @@ async fn proxy(
     .await?;
 
     let mut next_service_id = 1_u64;
+    let subscription_id = service_id(&mut next_service_id)?;
+    write_json(&mut socket_write, &json!({"type":"subscribe","requestId":subscription_id})).await?;
     let mut pending: HashMap<String, Pending> = HashMap::new();
     let mut stop_all: HashMap<u64, (usize, Vec<TuiStopOutcome>)> = HashMap::new();
     let mut attached = HashSet::new();
@@ -205,15 +207,17 @@ async fn proxy(
                             let activities = parse_activities(&message);
                             let attempts = parse_attempts(&message);
                             let flow_runs = parse_flow_runs(&message);
+                            let coordinator_process = parse_coordinator_process(&message);
+                            let tool_requests = parse_tool_requests(&message);
                             known_processes = processes
                                 .iter()
                                 .cloned()
                                 .map(|process| (process.process_id.clone(), process))
                                 .collect();
                             let response = if subscribe {
-                                TuiResponse::Snapshot { version: PROTOCOL_VERSION, request_id: tui_id, processes: processes.clone(), runs, activities, attempts, flow_runs }
+                                TuiResponse::Snapshot { version: PROTOCOL_VERSION, request_id: tui_id, processes: processes.clone(), runs, activities, attempts, flow_runs, coordinator_process, tool_requests }
                             } else {
-                                TuiResponse::Processes { version: PROTOCOL_VERSION, request_id: tui_id, processes: processes.clone(), runs, activities, attempts, flow_runs }
+                                TuiResponse::Processes { version: PROTOCOL_VERSION, request_id: tui_id, processes: processes.clone(), runs, activities, attempts, flow_runs, coordinator_process, tool_requests }
                             };
                             write_frame(&mut ui_write, &response).await?;
                             if role == "tui" {
@@ -258,7 +262,13 @@ async fn proxy(
                     continue;
                 }
                 match message_type {
-                    "attached" => {}
+                    "coordinatorEvent" => {
+                        if let Some(activity) = parse_tool_event(&message) {
+                            write_frame(&mut ui_write, &TuiResponse::ToolActivityChanged { version: PROTOCOL_VERSION, event_id, activity }).await?;
+                            event_id = event_id.wrapping_add(1);
+                        }
+                    }
+                    "attached" | "subscribed" => {}
                     "processStarted" => {
                         let process_id = message.get("processId").and_then(Value::as_str).unwrap_or("").to_owned();
                         if !process_id.is_empty() {
@@ -266,6 +276,8 @@ async fn proxy(
                                 process_id,
                                 pid: 0,
                                 alive: true,
+                                parent_process_id: None,
+                                start_time_ticks: None,
                                 executable: None,
                                 framework: None,
                                 run_label: None,
@@ -278,6 +290,8 @@ async fn proxy(
                             });
                             process.pid = message.get("pid").and_then(Value::as_u64).unwrap_or(process.pid as u64) as u32;
                             process.alive = true;
+                            process.parent_process_id = message.get("parentProcessId").and_then(Value::as_u64).map(|value| value as u32);
+                            process.start_time_ticks = message.get("startTimeTicks").and_then(Value::as_u64);
                             if let Some(executable) = message.get("executable").and_then(Value::as_str) {
                                 process.executable = Some(executable.to_owned());
                             }
@@ -332,6 +346,8 @@ async fn proxy(
                 Ok((reader, writer)) => {
                     socket_read = reader;
                     socket_write = writer;
+                    let subscription_id = service_id(&mut next_service_id)?;
+                    write_json(&mut socket_write, &json!({"type":"subscribe","requestId":subscription_id})).await?;
                     break;
                 }
                 Err(_) => tokio::time::sleep(std::time::Duration::from_secs(1)).await,
@@ -351,6 +367,8 @@ fn parse_processes(value: &Value) -> Vec<TuiProcess> {
                 process_id: p.get("processId")?.as_str()?.to_owned(),
                 pid: p.get("pid")?.as_u64()? as u32,
                 alive: p.get("alive")?.as_bool()?,
+                parent_process_id: p.get("parentProcessId").and_then(Value::as_u64).map(|value| value as u32),
+                start_time_ticks: p.get("startTimeTicks").and_then(Value::as_u64),
                 executable: p
                     .get("executable")
                     .and_then(Value::as_str)
@@ -402,6 +420,62 @@ fn parse_attempts(value: &Value) -> Vec<TuiAttempt> {
     serde_json::from_value(records(value, "attempts")).unwrap_or_default()
 }
 
+fn parse_coordinator_process(value: &Value) -> Option<TuiCoordinatorProcess> {
+    let process = value.get("coordinatorProcess")?;
+    Some(TuiCoordinatorProcess {
+        pid: process.get("pid")?.as_u64()? as u32,
+        executable: process.get("executable").and_then(Value::as_str).map(str::to_owned),
+        identity_limitation: process.get("identityLimitation").and_then(Value::as_str).map(str::to_owned),
+    })
+}
+
+fn parse_tool(value: &Value) -> Option<TuiToolActivity> {
+    Some(TuiToolActivity {
+        request_id: value.get("requestId")?.as_str()?.to_owned(),
+        attempt_id: value.get("attemptId")?.as_str()?.to_owned(),
+        generation: value.get("generation")?.as_u64()?,
+        flow_id: value.get("flowId")?.as_str()?.to_owned(),
+        task_id: value.get("taskId")?.as_str()?.to_owned(),
+        tool_name: value.get("toolName")?.as_str()?.to_owned(),
+        status: value.get("state")?.as_str()?.to_owned(),
+        supervisor_process_id: value.get("supervisorProcessId").and_then(Value::as_str).map(str::to_owned),
+        updated_at_ms: value.get("resolvedAtMs").or_else(|| value.get("requestedAtMs")).and_then(Value::as_u64).unwrap_or_default(),
+    })
+}
+
+fn parse_tool_requests(value: &Value) -> Vec<TuiToolActivity> {
+    value.get("toolRequests").and_then(Value::as_array).into_iter().flatten().filter_map(parse_tool).collect()
+}
+
+fn parse_tool_event(value: &Value) -> Option<TuiToolActivity> {
+    let event = value.get("event")?;
+    let kind = event.get("kind")?.as_str()?;
+    let detail = event.get("detail")?;
+    let mut activity = TuiToolActivity {
+        request_id: detail.get("requestId")?.as_str()?.to_owned(),
+        attempt_id: event.get("attemptId")?.as_str()?.to_owned(),
+        generation: detail.get("generation")?.as_u64()?,
+        flow_id: detail.get("flowId").and_then(Value::as_str).unwrap_or("").to_owned(),
+        task_id: detail.get("taskId").and_then(Value::as_str).unwrap_or("").to_owned(),
+        tool_name: detail.get("toolName").and_then(Value::as_str).unwrap_or("").to_owned(),
+        status: detail.get("state")?.as_str()?.to_owned(),
+        // Coordinator event processId describes the attempt context, not a tool-launched child.
+        // Only a request record's explicit supervisorProcessId can establish that link.
+        supervisor_process_id: None,
+        updated_at_ms: event.get("occurredAtMs").and_then(Value::as_u64).unwrap_or_default(),
+    };
+    activity.status = match kind {
+        "workerToolRequested" => "pending".into(),
+        "workerToolClaimed" => "claimed".into(),
+        "workerToolResolved" | "workerToolTimedOut" | "workerToolOutcomeUnknown" => activity.status,
+        _ => return None,
+    };
+    if !matches!(activity.status.as_str(), "pending" | "claimed" | "completed" | "failed" | "timedOut" | "cancelled" | "interrupted" | "unknown") {
+        return None;
+    }
+    Some(activity)
+}
+
 fn parse_flow_runs(value: &Value) -> Vec<Value> {
     value
         .get("flowRuns")
@@ -435,7 +509,7 @@ async fn read_json_line<R: AsyncBufRead + Unpin>(reader: &mut R) -> io::Result<V
         ));
     }
     if count > MAX_SERVICE_FRAME {
-        return Err(invalid_data("service frame exceeds 1 MiB"));
+        return Err(invalid_data("service frame exceeds 16 MiB"));
     }
     serde_json::from_slice(&line).map_err(invalid_data)
 }
@@ -454,7 +528,7 @@ fn invalid_data(error: impl std::fmt::Display) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::{
-        connect, parse_activities, parse_attempts, parse_flow_runs, parse_processes, parse_runs,
+        connect, parse_activities, parse_attempts, parse_flow_runs, parse_processes, parse_runs, parse_coordinator_process, parse_tool_event, parse_tool_requests,
         proxy, read_json_line, read_scoped_token, write_json,
     };
     use agent_supervisor::tui::{
@@ -468,6 +542,38 @@ mod tests {
     use tokio::time::{timeout, Duration};
 
     #[test]
+    fn coordinator_identity_preserves_service_pid_and_executable_limitation() {
+        let process = parse_coordinator_process(&json!({"coordinatorProcess":{"pid":91,"executable":"/usr/bin/agent-supervisor-service","identityLimitation":null}})).unwrap();
+        assert_eq!(process.pid, 91);
+        assert_eq!(process.executable.as_deref(), Some("/usr/bin/agent-supervisor-service"));
+        let limited = parse_coordinator_process(&json!({"coordinatorProcess":{"pid":91,"executable":null,"identityLimitation":"service executable path unavailable from std::env::current_exe()"}})).unwrap();
+        assert_eq!(limited.identity_limitation.as_deref(), Some("service executable path unavailable from std::env::current_exe()"));
+        assert!(parse_coordinator_process(&json!({"coordinatorProcess":{"executable":"missing-pid"}})).is_none());
+    }
+
+    #[test]
+    fn tool_snapshots_and_events_require_attempt_and_request_identity() {
+        let snapshot = json!({"toolRequests":[{
+            "attemptId":"attempt-3","generation":4,"requestId":"req-8","flowId":"flow-2","taskId":"task-5",
+            "toolName":"exec","state":"claimed","requestedAtMs":100,"arguments":{"secret":"omitted from TUI"}
+        }]});
+        let tools = parse_tool_requests(&snapshot);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].tool_name, "exec");
+        assert_eq!(tools[0].status, "claimed");
+        assert_eq!(tools[0].supervisor_process_id, None);
+        assert!(parse_tool_requests(&json!({"toolRequests":[{"requestId":"missing-attempt"}]})).is_empty());
+
+        let changed = parse_tool_event(&json!({"event":{
+            "kind":"workerToolClaimed","attemptId":"attempt-3","occurredAtMs":120,
+            "detail":{"requestId":"req-8","generation":4,"state":"claimed"}
+        }})).unwrap();
+        assert_eq!(changed.request_id, "req-8");
+        assert_eq!(changed.status, "claimed");
+        assert!(parse_tool_event(&json!({"event":{"kind":"workerToolClaimed","detail":{"requestId":"req-8"}}})).is_none());
+    }
+
+    #[test]
     fn service_snapshot_preserves_supervisor_and_flow_context_fields() {
         let processes = parse_processes(&json!({
             "type": "snapshot",
@@ -475,6 +581,8 @@ mod tests {
                 "processId": "v1:supervisor:9",
                 "pid": 1234,
                 "alive": true,
+                "parentProcessId": 11,
+                "startTimeTicks": 170,
                 "executable": "/usr/bin/codex",
                 "framework": "codex",
                 "runLabel": "worker-3",
@@ -486,6 +594,8 @@ mod tests {
         }));
         assert_eq!(processes.len(), 1);
         assert_eq!(processes[0].process_id, "v1:supervisor:9");
+        assert_eq!(processes[0].parent_process_id, Some(11));
+        assert_eq!(processes[0].start_time_ticks, Some(170));
         assert_eq!(processes[0].pid, 1234);
         assert_eq!(processes[0].project_id.as_deref(), Some("project-a"));
         assert_eq!(processes[0].flow_run_id.as_deref(), Some("flow-b"));
@@ -622,6 +732,11 @@ mod tests {
         .await
         .unwrap();
         let (mut service_reader, mut service_writer) = service_peer.into_split();
+        let coordinator_subscribe = read_json_line(&mut BufReader::new(&mut service_reader))
+            .await
+            .unwrap();
+        assert_eq!(coordinator_subscribe["type"], "subscribe");
+        write_json(&mut service_writer, &json!({"type":"subscribed","requestId":coordinator_subscribe["requestId"],"events":[]})).await.unwrap();
         let snapshot_request = read_json_line(&mut BufReader::new(&mut service_reader))
             .await
             .unwrap();
@@ -645,7 +760,9 @@ mod tests {
                 }],
                 "runs":[{"runId":"run-1","managerId":"manager-1","status":"running","context":{"projectId":"p","flowRunId":"f","framework":"codex"},"revision":1,"updatedAtMs":1000}],
                 "activities":[{"activityId":"activity-1","runId":"run-1","kind":"chat","status":"running","health":"healthy","lastContactAtMs":1000,"waitingReason":null,"revision":1,"updatedAtMs":1000}],
-                "attempts":[{"attemptId":"attempt-1","activityId":"activity-1","runId":"run-1","generation":1,"status":"running","cancellation":"none","processIds":["v1:manager:9"],"reports":[],"revision":1,"updatedAtMs":1000}]
+                "attempts":[{"attemptId":"attempt-1","activityId":"activity-1","runId":"run-1","generation":1,"status":"running","cancellation":"none","processIds":["v1:manager:9"],"reports":[],"revision":1,"updatedAtMs":1000}],
+                "coordinatorProcess":{"pid":77,"executable":"/bin/service","identityLimitation":null},
+                "toolRequests":[{"attemptId":"attempt-1","generation":1,"requestId":"tool-1","flowId":"flow-1","taskId":"task-1","toolName":"exec","state":"pending","requestedAtMs":1000}]
             }),
         )
         .await
@@ -653,9 +770,13 @@ mod tests {
         let snapshot: TuiResponse =
             serde_json::from_slice(&read_frame(&mut ui_reader).await.unwrap()).unwrap();
         assert!(
-            matches!(snapshot, TuiResponse::Snapshot { request_id: 7, runs, activities, attempts, .. }
-            if runs.len() == 1 && activities[0].status == "running" && attempts[0].process_ids.len() == 1)
+            matches!(snapshot, TuiResponse::Snapshot { request_id: 7, runs, activities, attempts, tool_requests, coordinator_process, .. }
+            if runs.len() == 1 && activities[0].status == "running" && attempts[0].process_ids.len() == 1 && tool_requests.len() == 1 && tool_requests[0].request_id == "tool-1" && coordinator_process.as_ref().is_some_and(|process| process.pid == 77))
         );
+
+        write_json(&mut service_writer, &json!({"type":"coordinatorEvent","event":{"kind":"workerToolClaimed","attemptId":"attempt-1","occurredAtMs":1010,"detail":{"requestId":"tool-1","generation":1,"state":"claimed"}}})).await.unwrap();
+        let tool_event: TuiResponse = serde_json::from_slice(&read_frame(&mut ui_reader).await.unwrap()).unwrap();
+        assert!(matches!(tool_event, TuiResponse::ToolActivityChanged { activity, .. } if activity.request_id == "tool-1" && activity.status == "claimed"));
 
         let attach = read_json_line(&mut BufReader::new(&mut service_reader))
             .await
@@ -736,6 +857,15 @@ mod tests {
         write_json(
             &mut reconnected_writer,
             &json!({"type":"ready","version":1,"role":"tui"}),
+        )
+        .await
+        .unwrap();
+        // After reconnecting, the TUI subscribes again before any request.
+        let resubscribe = read_json_line(&mut reconnected_reader).await.unwrap();
+        assert_eq!(resubscribe["type"], "subscribe");
+        write_json(
+            &mut reconnected_writer,
+            &json!({"type":"subscribed","requestId":resubscribe["requestId"],"events":[]}),
         )
         .await
         .unwrap();

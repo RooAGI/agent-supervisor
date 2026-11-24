@@ -67,7 +67,7 @@ actor; the request's `actor` field is ignored. A `control` client can start,
 provide stdin, close stdin, and stop a process. Process controls use the full
 Supervisor process ID, never an OS PID. Output capabilities remain valid for
 that process while the service is running and can replay its retained history;
-the service clears them on restart. JSONL frames are limited to 1 MiB.
+the service clears them on restart. JSONL frames are limited to 16 MiB.
 
 ## Embedded mode
 

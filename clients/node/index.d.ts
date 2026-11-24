@@ -27,6 +27,11 @@ export interface SupervisorLaunch {
   policy: object
   attemptId?: string
   generation?: number
+  /**
+   * Stop what the process leaves running in its process group when it exits
+   * (SIGTERM, then SIGKILL). For one-shot commands; off by default.
+   */
+  stopProcessGroupOnExit?: boolean
 }
 export interface ServiceCounts {
   runs: number; activeRuns: number; activities: number; activeActivities: number

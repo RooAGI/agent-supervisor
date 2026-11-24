@@ -1,6 +1,6 @@
 use crate::{SandboxError, SupervisedChild};
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tokio::sync::mpsc;
@@ -15,6 +15,13 @@ pub enum ProcessEvent {
     Stdout(Vec<u8>),
     Stderr(Vec<u8>),
     Exited(crate::ProcessReceipt),
+}
+
+/// What `ProcessEventStream::next` woke up for.
+enum Waited {
+    Message(Option<EventMessage>),
+    Exit(Result<crate::ProcessReceipt, SandboxError>),
+    DrainDeadline,
 }
 
 enum EventMessage {
@@ -36,7 +43,19 @@ pub struct ProcessEventStream {
     readers_finished: usize,
     stdin: Option<Box<dyn tokio::io::AsyncWrite + Unpin + Send>>,
     tap: Option<crate::event_log::ProcessTap>,
+    /// When the process itself exited; output may still be draining.
+    exited_at: Option<Instant>,
+    /// How long output may keep draining after the exit before `Exited` is
+    /// reported anyway (a process left running can hold the pipes open).
+    drain_grace: Duration,
+    /// Stop what the process left running in its process group when it exits.
+    stop_group_on_exit: bool,
 }
+
+/// Default time output may keep draining after the process exits.
+pub const DEFAULT_OUTPUT_DRAIN_GRACE: Duration = Duration::from_secs(2);
+/// Time processes left running get to stop on SIGTERM before SIGKILL.
+const LEFTOVER_STOP_GRACE: Duration = Duration::from_millis(500);
 
 impl ProcessEventStream {
     pub(crate) fn new(mut child: SupervisedChild) -> Result<Self, SandboxError> {
@@ -65,7 +84,59 @@ impl ProcessEventStream {
             readers_finished: 0,
             stdin,
             tap,
+            exited_at: None,
+            drain_grace: DEFAULT_OUTPUT_DRAIN_GRACE,
+            stop_group_on_exit: false,
         })
+    }
+
+    /// Stop what the process leaves running in its process group (servers
+    /// started in the background) as soon as the process itself exits: SIGTERM,
+    /// then SIGKILL after a short grace. Use it for one-shot commands. Off by
+    /// default, so a process may hand work to children that outlive it. On macOS
+    /// a process that moves itself to another process group escapes this; Linux
+    /// cgroups and Windows job objects also cover those.
+    pub fn stop_process_group_on_exit(&mut self, enabled: bool) {
+        self.stop_group_on_exit = enabled;
+    }
+
+    /// How long output may keep draining after the process exits before
+    /// `Exited` is reported with `output_incomplete` set.
+    pub fn set_output_drain_grace(&mut self, grace: Duration) {
+        self.drain_grace = grace;
+    }
+
+    /// The process itself has exited: record it, release the child handle,
+    /// and start stopping what it left running when asked to. The stop runs in
+    /// its own task, so a caller that drops `next()` midway cannot skip it.
+    fn main_exited(&mut self, receipt: crate::ProcessReceipt) {
+        if let Some(child) = self.child.take() {
+            if self.stop_group_on_exit {
+                let container = child.container();
+                tokio::spawn(async move {
+                    let _ = container.request_graceful_stop();
+                    tokio::time::sleep(LEFTOVER_STOP_GRACE).await;
+                    let _ = container.kill_remaining_group();
+                });
+            }
+        }
+        self.exit = Some(receipt);
+        self.exited_at = Some(Instant::now());
+    }
+
+    /// `Exited` once the output has drained, or the drain grace has passed.
+    fn finish_if_drained(&mut self) -> Option<ProcessEvent> {
+        let exited_at = self.exited_at?;
+        if self.readers_finished >= 2 {
+            return self.take_exit_event();
+        }
+        if exited_at.elapsed() >= self.drain_grace {
+            if let Some(receipt) = self.exit.as_mut() {
+                receipt.output_incomplete = true;
+            }
+            return self.take_exit_event();
+        }
+        None
     }
 
     /// Write bytes to the running process stdin.
@@ -101,8 +172,7 @@ impl ProcessEventStream {
         loop {
             if let Some(child) = self.child.as_mut() {
                 if let Some(status) = child.try_wait().await? {
-                    self.exit = Some(status);
-                    self.child = None;
+                    self.main_exited(status);
                 }
             }
 
@@ -137,17 +207,55 @@ impl ProcessEventStream {
                     if self.child.is_none() {
                         return Ok(self.take_exit_event());
                     }
-                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    if let Some(child) = self.child.as_mut() {
+                        let receipt = child.wait_exit().await?;
+                        self.main_exited(receipt);
+                    }
                     continue;
                 }
                 Err(mpsc::error::TryRecvError::Empty) => {}
             }
 
-            if self.child.is_none() && self.readers_finished == 2 {
-                return Ok(self.take_exit_event());
+            if self.child.is_none() {
+                if let Some(event) = self.finish_if_drained() {
+                    return Ok(Some(event));
+                }
             }
 
-            match self.messages.recv().await {
+            // Wait for output, the process's own exit, or the end of the drain
+            // grace, whichever comes first. Output held open by a process left
+            // running must not hide the exit.
+            let drain_deadline = self
+                .exited_at
+                .map(|exited_at| tokio::time::Instant::from_std(exited_at + self.drain_grace));
+            let waited = {
+                let messages = &mut self.messages;
+                let child = self.child.as_mut();
+                tokio::select! {
+                    message = messages.recv() => Waited::Message(message),
+                    receipt = async {
+                        match child {
+                            Some(child) => child.wait_exit().await,
+                            None => std::future::pending().await,
+                        }
+                    } => Waited::Exit(receipt),
+                    _ = async {
+                        match drain_deadline {
+                            Some(deadline) => tokio::time::sleep_until(deadline).await,
+                            None => std::future::pending().await,
+                        }
+                    } => Waited::DrainDeadline,
+                }
+            };
+            let message = match waited {
+                Waited::Message(message) => message,
+                Waited::Exit(receipt) => {
+                    self.main_exited(receipt?);
+                    continue;
+                }
+                Waited::DrainDeadline => continue,
+            };
+            match message {
                 Some(EventMessage::Stdout(bytes)) => return Ok(Some(ProcessEvent::Stdout(bytes))),
                 Some(EventMessage::Stderr(bytes)) => return Ok(Some(ProcessEvent::Stderr(bytes))),
                 Some(EventMessage::Limit(stdout)) => {
@@ -436,5 +544,117 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    /// Runs `script` with /bin/sh; it writes the PID of a background
+    /// `sleep 30` to `pid_file` and keeps the sleep holding stdout open.
+    fn background_holder(pid_file: &std::path::Path) -> ExecutionRequest {
+        ExecutionRequest {
+            executable: PathBuf::from("/bin/sh"),
+            args: vec![
+                "-c".into(),
+                format!(
+                    "sleep 30 & echo $! > '{}'; echo started",
+                    pid_file.display()
+                ),
+            ],
+            working_directory: None,
+            policy: crate::SandboxPolicy::default(),
+        }
+    }
+
+    async fn run_to_exit(stream: &mut ProcessEventStream) -> (String, crate::ProcessReceipt) {
+        let mut stdout = String::new();
+        loop {
+            match stream.next().await.unwrap() {
+                Some(ProcessEvent::Stdout(bytes)) => {
+                    stdout.push_str(&String::from_utf8_lossy(&bytes))
+                }
+                Some(ProcessEvent::Exited(receipt)) => return (stdout, receipt),
+                Some(_) => {}
+                None => panic!("the stream ended without an exit"),
+            }
+        }
+    }
+
+    fn alive(pid: i32) -> bool {
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
+
+    // Found live 2026-11-22: a command that left a server running in the
+    // background was never reported as exited, because the server held its
+    // output open.
+    #[tokio::test]
+    async fn the_exit_is_reported_even_when_a_background_process_holds_the_output_open() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("pid");
+        let mut stream = spawn(&background_holder(&pid_file))
+            .unwrap()
+            .into_event_stream()
+            .unwrap();
+        stream.set_output_drain_grace(Duration::from_millis(300));
+        let started = Instant::now();
+        let (stdout, receipt) =
+            tokio::time::timeout(Duration::from_secs(10), run_to_exit(&mut stream))
+                .await
+                .expect("the exit is reported without waiting for the background process");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(stdout, "started\n");
+        assert!(receipt.output_incomplete, "the output was still held open");
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(
+            alive(pid),
+            "without the option, the background process keeps running"
+        );
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+    }
+
+    #[tokio::test]
+    async fn a_one_shot_command_has_what_it_left_running_stopped_when_it_exits() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("pid");
+        let mut stream = spawn(&background_holder(&pid_file))
+            .unwrap()
+            .into_event_stream()
+            .unwrap();
+        stream.stop_process_group_on_exit(true);
+        let (stdout, receipt) =
+            tokio::time::timeout(Duration::from_secs(10), run_to_exit(&mut stream))
+                .await
+                .expect("the exit is reported");
+        assert_eq!(stdout, "started\n");
+        assert!(
+            !receipt.output_incomplete,
+            "stopping the group closes its output"
+        );
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while alive(pid) && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(!alive(pid), "the background process was stopped");
+    }
+
+    #[tokio::test]
+    async fn a_command_without_background_processes_reports_all_its_output() {
+        let request = ExecutionRequest {
+            executable: PathBuf::from("/bin/sh"),
+            args: vec!["-c".into(), "for i in 1 2 3; do echo line $i; done".into()],
+            working_directory: None,
+            policy: crate::SandboxPolicy::default(),
+        };
+        let mut stream = spawn(&request).unwrap().into_event_stream().unwrap();
+        stream.stop_process_group_on_exit(true);
+        let (stdout, receipt) = run_to_exit(&mut stream).await;
+        assert_eq!(stdout, "line 1\nline 2\nline 3\n");
+        assert!(!receipt.output_incomplete);
     }
 }
