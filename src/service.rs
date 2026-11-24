@@ -4544,18 +4544,39 @@ mod tests {
         write_json(&mut write, &start_request).await.unwrap();
         drop(write);
         drop(reader);
-        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Wait until the original request has completed its durable launch
+        // reservation before retrying. A fixed delay can race the reservation
+        // under load, making the retry correctly report an unknown outcome.
+        let snapshot = tokio::time::timeout(Duration::from_secs(2), async {
+            let mut attempt = 0;
+            loop {
+                let snapshot = call(
+                    &socket,
+                    "control",
+                    &control,
+                    json!({
+                        "type":"snapshot",
+                        "requestId":format!("snapshot-lost-reply-{attempt}")
+                    }),
+                )
+                .await;
+                if snapshot["processes"]
+                    .as_array()
+                    .is_some_and(|processes| processes.len() == 1)
+                {
+                    break snapshot;
+                }
+                attempt += 1;
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("original launch should finish before retry");
 
         let retry = call(&socket, "control", &control, start_request.clone()).await;
         assert_eq!(retry["type"], "started", "retry response: {retry}");
         let process_id = retry["processId"].as_str().unwrap().to_owned();
-        let snapshot = call(
-            &socket,
-            "control",
-            &control,
-            json!({"type":"snapshot","requestId":"snapshot-before-restart"}),
-        )
-        .await;
         assert_eq!(snapshot["processes"].as_array().unwrap().len(), 1);
         assert_eq!(snapshot["processes"][0]["processId"], process_id);
 
