@@ -4545,38 +4545,36 @@ mod tests {
         drop(write);
         drop(reader);
 
-        // Wait until the original request has completed its durable launch
-        // reservation before retrying. A fixed delay can race the reservation
-        // under load, making the retry correctly report an unknown outcome.
-        let snapshot = tokio::time::timeout(Duration::from_secs(2), async {
-            let mut attempt = 0;
+        // The process can appear in the supervisor snapshot just before its
+        // durable launch reservation is completed. Retry the same idempotent
+        // request until that receipt is available instead of relying on a
+        // fixed delay.
+        let retry = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
-                let snapshot = call(
-                    &socket,
-                    "control",
-                    &control,
-                    json!({
-                        "type":"snapshot",
-                        "requestId":format!("snapshot-lost-reply-{attempt}")
-                    }),
-                )
-                .await;
-                if snapshot["processes"]
-                    .as_array()
-                    .is_some_and(|processes| processes.len() == 1)
-                {
-                    break snapshot;
+                let retry = call(&socket, "control", &control, start_request.clone()).await;
+                if retry["type"] == "started" {
+                    break retry;
                 }
-                attempt += 1;
+                assert_eq!(retry["type"], "error", "retry response: {retry}");
+                assert_eq!(retry["code"], "start_failed", "retry response: {retry}");
+                assert!(retry["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("reserved with an unknown outcome"));
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
         })
         .await
-        .expect("original launch should finish before retry");
+        .expect("original launch should finish before retry succeeds");
 
-        let retry = call(&socket, "control", &control, start_request.clone()).await;
-        assert_eq!(retry["type"], "started", "retry response: {retry}");
         let process_id = retry["processId"].as_str().unwrap().to_owned();
+        let snapshot = call(
+            &socket,
+            "control",
+            &control,
+            json!({"type":"snapshot","requestId":"snapshot-before-restart"}),
+        )
+        .await;
         assert_eq!(snapshot["processes"].as_array().unwrap().len(), 1);
         assert_eq!(snapshot["processes"][0]["processId"], process_id);
 
