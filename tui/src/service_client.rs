@@ -12,7 +12,7 @@ use tokio::io::{
 use tokio::net::UnixStream;
 use tokio::task::JoinHandle;
 
-const MAX_SERVICE_FRAME: usize = 1024 * 1024;
+const MAX_SERVICE_FRAME: usize = 16 * 1024 * 1024;
 
 enum Pending {
     Snapshot { tui_id: u64, subscribe: bool },
@@ -509,7 +509,7 @@ async fn read_json_line<R: AsyncBufRead + Unpin>(reader: &mut R) -> io::Result<V
         ));
     }
     if count > MAX_SERVICE_FRAME {
-        return Err(invalid_data("service frame exceeds 1 MiB"));
+        return Err(invalid_data("service frame exceeds 16 MiB"));
     }
     serde_json::from_slice(&line).map_err(invalid_data)
 }

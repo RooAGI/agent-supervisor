@@ -22,7 +22,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{broadcast, mpsc, watch};
 
-const MAX_FRAME: usize = 1024 * 1024;
+const MAX_FRAME: usize = 16 * 1024 * 1024;
 const EVENT_HISTORY: usize = 256;
 const DEFAULT_SESSION_TTL: Duration = Duration::from_secs(8 * 60 * 60);
 const MAX_SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
@@ -2462,22 +2462,46 @@ impl SupervisorService {
                             let event = match next {
                                 Ok(Some(event)) => event,
                                 Ok(None) => break,
-                                Err(error) => match stream.wait().await {
-                                    Ok(mut receipt) => {
-                                        // The process may die of the closed pipe
-                                        // first; the limit is the real reason.
-                                        match error.code_kind() {
-                                            crate::SandboxErrorCode::OutputTooLarge => {
-                                                receipt.termination = crate::TerminationReason::StdoutLimitExceeded
-                                            }
-                                            crate::SandboxErrorCode::StderrTooLarge => {
-                                                receipt.termination = crate::TerminationReason::StderrLimitExceeded
-                                            }
-                                            _ => {}
+                                Err(error) => {
+                                    let failure = json!({
+                                        "type":"error",
+                                        "processId":id.to_string(),
+                                        "code":error.code(),
+                                        "message":error.message(),
+                                        "metadata":{
+                                            "framework":event_metadata.framework(),
+                                            "runLabel":event_metadata.run_label(),
+                                            "projectId":event_metadata.project_id(),
+                                            "flowRunId":event_metadata.flow_run_id(),
+                                            "taskId":event_metadata.task_id(),
+                                            "postId":event_metadata.post_id(),
+                                            "workerId":event_metadata.worker_id(),
+                                            "runtimeRunId":event_metadata.runtime_run_id()
                                         }
-                                        ProcessEvent::Exited(receipt)
+                                    });
+                                    {
+                                        let mut h = history.lock().unwrap();
+                                        h.push_back(failure.clone());
+                                        while h.len() > EVENT_HISTORY { h.pop_front(); }
                                     }
-                                    Err(_) => break,
+                                    let _ = events.send(failure);
+                                    match stream.wait().await {
+                                        Ok(mut receipt) => {
+                                            // The process may die of the closed pipe
+                                            // first; the limit is the real reason.
+                                            match error.code_kind() {
+                                                crate::SandboxErrorCode::OutputTooLarge => {
+                                                    receipt.termination = crate::TerminationReason::StdoutLimitExceeded
+                                                }
+                                                crate::SandboxErrorCode::StderrTooLarge => {
+                                                    receipt.termination = crate::TerminationReason::StderrLimitExceeded
+                                                }
+                                                _ => {}
+                                            }
+                                            ProcessEvent::Exited(receipt)
+                                        }
+                                        Err(_) => break,
+                                    }
                                 },
                             };
                             let value = event_json(id, event, &event_metadata);
@@ -2895,7 +2919,7 @@ async fn read_frame_within<R: tokio::io::AsyncBufRead + Unpin>(
     if n > MAX_FRAME {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "frame exceeds 1 MiB",
+            "frame exceeds 16 MiB",
         ));
     }
     Ok(())

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Literal
 
 
-MAX_FRAME_BYTES = 1024 * 1024
+MAX_FRAME_BYTES = 16 * 1024 * 1024
 ServiceRole = Literal["view", "control", "tui", "reporter", "canceller", "output"]
 ExecutionStatus = Literal["queued", "running", "succeeded", "failed", "cancelled", "blocked", "unknown"]
 ActivityStatus = Literal["queued", "running", "waitingForInput", "waitingForApproval", "succeeded", "failed", "cancelled", "timedOut", "blocked", "unknown"]
@@ -767,9 +767,9 @@ async def _read_json_line(reader: asyncio.StreamReader) -> dict[str, Any] | None
             return None
         raise SupervisorServiceDisconnected("service closed mid-frame") from error
     except asyncio.LimitOverrunError as error:
-        raise SupervisorServiceError("service response exceeds the 1 MiB frame limit") from error
+        raise SupervisorServiceError("service response exceeds the 16 MiB frame limit") from error
     if len(frame) > MAX_FRAME_BYTES:
-        raise SupervisorServiceError("service response exceeds the 1 MiB frame limit")
+        raise SupervisorServiceError("service response exceeds the 16 MiB frame limit")
     value = json.loads(frame)
     if not isinstance(value, dict):
         raise SupervisorServiceError("service response must be a JSON object")
@@ -779,7 +779,7 @@ async def _read_json_line(reader: asyncio.StreamReader) -> dict[str, Any] | None
 async def _write_json(writer: asyncio.StreamWriter, value: dict[str, Any]) -> None:
     frame = json.dumps(value, separators=(",", ":")).encode("utf-8") + b"\n"
     if len(frame) > MAX_FRAME_BYTES:
-        raise SupervisorServiceError("request exceeds the 1 MiB frame limit")
+        raise SupervisorServiceError("request exceeds the 16 MiB frame limit")
     writer.write(frame)
     await writer.drain()
 

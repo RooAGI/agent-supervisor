@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { PassThrough, Writable } from 'node:stream'
 import { EventEmitter } from 'node:events'
 
-const MAX_FRAME_BYTES = 1024 * 1024
+const MAX_FRAME_BYTES = 16 * 1024 * 1024
 
 /** Client for the user-owned Agent Supervisor Unix socket service. */
 export class SupervisorClient extends EventEmitter {
@@ -360,13 +360,13 @@ export class SupervisorClient extends EventEmitter {
   #send(value) {
     if (this.socket.destroyed) throw new Error('Supervisor service is disconnected')
     const frame = `${JSON.stringify(value)}\n`
-    if (Buffer.byteLength(frame) > MAX_FRAME_BYTES) throw new Error('Supervisor request exceeds the 1 MiB frame limit')
+    if (Buffer.byteLength(frame) > MAX_FRAME_BYTES) throw new Error('Supervisor request exceeds the 16 MiB frame limit')
     this.socket.write(frame)
   }
   #onData(chunk) {
     this.buffer += chunk
     if (Buffer.byteLength(this.buffer) > MAX_FRAME_BYTES && !this.buffer.includes('\n')) {
-      this.#fail(new Error('Supervisor response exceeds the 1 MiB frame limit'))
+      this.#fail(new Error('Supervisor response exceeds the 16 MiB frame limit'))
       return
     }
     for (;;) {
@@ -374,7 +374,7 @@ export class SupervisorClient extends EventEmitter {
       if (end < 0) break
       const line = this.buffer.slice(0, end)
       this.buffer = this.buffer.slice(end + 1)
-      if (Buffer.byteLength(line) + 1 > MAX_FRAME_BYTES) { this.#fail(new Error('Supervisor response exceeds the 1 MiB frame limit')); return }
+      if (Buffer.byteLength(line) + 1 > MAX_FRAME_BYTES) { this.#fail(new Error('Supervisor response exceeds the 16 MiB frame limit')); return }
       let message
       try { message = JSON.parse(line) } catch (error) { this.#fail(error); return }
       if (message.type === 'ready') { this.readyResolve(); continue }

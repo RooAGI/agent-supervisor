@@ -22,7 +22,7 @@ use tokio::{
     },
 };
 
-const MAX_FRAME_BYTES: usize = 1024 * 1024;
+const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum ServiceClientError {
@@ -30,7 +30,7 @@ pub enum ServiceClientError {
     Io(#[from] std::io::Error),
     #[error("invalid Supervisor service JSON: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("Supervisor service frame exceeds the 1 MiB limit")]
+    #[error("Supervisor service frame exceeds the 16 MiB limit")]
     FrameTooLarge,
     #[error("Supervisor service rejected authentication for role {0}")]
     Unauthorized(String),
