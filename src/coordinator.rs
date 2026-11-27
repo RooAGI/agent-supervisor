@@ -31,6 +31,12 @@ const EVENT_CAPACITY: usize = 256;
 const MAX_RETAINED_REPORTS: usize = 64;
 const MAX_RETAINED_COORDINATOR_EVENTS: usize = 256;
 const MAX_REPORT_DETAIL_BYTES: usize = 32 * 1024;
+/// Every change persists the whole snapshot, and the store caps a snapshot at
+/// 4 MiB, so finished records cannot be kept forever. These bound how many
+/// finished runs (with their activities and attempts) and exited processes the
+/// snapshot keeps; records still in use are always kept.
+const MAX_RETAINED_FINISHED_RUNS: usize = 128;
+const MAX_RETAINED_EXITED_PROCESSES: usize = 256;
 const HEALTH_STALE_AFTER: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -307,6 +313,26 @@ pub(crate) struct CoordinatorReplay {
     pub cursor: u64,
     pub resync_required: bool,
     pub events: Vec<CoordinatorEvent>,
+}
+
+/// Why a change could not be written to the journal.
+#[derive(Debug)]
+enum PersistFailure {
+    /// The snapshot or another part of the record is over the store's bound;
+    /// dropping finished records can make it fit.
+    TooLarge,
+    Other(String),
+}
+
+impl fmt::Display for PersistFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TooLarge => f.write_str(
+                "the record exceeds the journal's size bound even with only records in use kept",
+            ),
+            Self::Other(message) => f.write_str(message),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -2568,6 +2594,7 @@ impl CoordinatorActor {
             .await;
             if self.persistence_failed {
                 startup.send_replace(-1);
+                Self::refuse_after_persistence_failure(commands).await;
                 return;
             }
         }
@@ -2598,6 +2625,18 @@ impl CoordinatorActor {
             } else {
                 break;
             }
+        }
+        if self.persistence_failed {
+            Self::refuse_after_persistence_failure(commands).await;
+        }
+    }
+
+    /// Once a change could not be persisted, memory and the journal disagree,
+    /// so no further command may run. Callers are told persistence failed
+    /// rather than that the loop is closed, so the cause stays visible.
+    async fn refuse_after_persistence_failure(mut commands: mpsc::Receiver<Command>) {
+        while let Some(command) = commands.recv().await {
+            command.reply_error(CoordinatorError::Persistence);
         }
     }
 
@@ -3879,39 +3918,198 @@ impl CoordinatorActor {
         while self.retained_events.len() > MAX_RETAINED_COORDINATOR_EVENTS {
             self.retained_events.pop_front();
         }
-        let snapshot = self.build_snapshot();
-        if let Some(store) = self.store.as_mut() {
-            let store = Arc::clone(store);
-            let request_id = if self.active_request_id.starts_with("internal:") {
-                format!("{}:{}", self.active_request_id, self.sequence)
-            } else {
-                self.active_request_id.clone()
-            };
-            let command = self.active_command.clone();
-            let event_value = serde_json::to_value(&event).unwrap_or(Value::Null);
-            let snapshot_value = serde_json::to_value(snapshot).unwrap_or(Value::Null);
-            let result_value = self.result_for_event(&event);
-            let persisted = tokio::task::spawn_blocking(move || {
-                store
-                    .lock()
-                    .map_err(|_| ())?
-                    .commit(
-                        &request_id,
-                        command,
-                        event_value,
-                        snapshot_value,
-                        result_value,
-                    )
-                    .map_err(|_| ())
-            })
-            .await;
-            if !matches!(persisted, Ok(Ok(_))) {
+        self.prune_retained(
+            MAX_RETAINED_FINISHED_RUNS,
+            MAX_RETAINED_EXITED_PROCESSES,
+            &event,
+        );
+        if let Some(store) = self.store.as_ref().map(Arc::clone) {
+            let mut persisted = self.persist(&store, &event).await;
+            // Keep only records still in use and try once more.
+            if matches!(persisted, Err(PersistFailure::TooLarge))
+                && self.prune_retained(0, 0, &event)
+            {
+                persisted = self.persist(&store, &event).await;
+            }
+            if let Err(failure) = persisted {
+                eprintln!(
+                    "agent-supervisor-service: coordinator stopped; change {} ({}) could not be persisted: {}",
+                    event.sequence, event.kind, failure
+                );
                 self.persistence_failed = true;
                 return;
             }
         }
         let _ = self.event_tx.send(event);
         self.publish_snapshot();
+    }
+
+    async fn persist(
+        &self,
+        store: &Arc<Mutex<CoordinatorStore>>,
+        event: &CoordinatorEvent,
+    ) -> Result<(), PersistFailure> {
+        let store = Arc::clone(store);
+        let request_id = if self.active_request_id.starts_with("internal:") {
+            format!("{}:{}", self.active_request_id, self.sequence)
+        } else {
+            self.active_request_id.clone()
+        };
+        let command = self.active_command.clone();
+        let event_value = serde_json::to_value(event).unwrap_or(Value::Null);
+        let snapshot_value = serde_json::to_value(self.build_snapshot()).unwrap_or(Value::Null);
+        let result_value = self.result_for_event(event);
+        let persisted = tokio::task::spawn_blocking(move || {
+            store
+                .lock()
+                .map_err(|_| PersistFailure::Other("coordinator store lock poisoned".to_owned()))?
+                .commit(
+                    &request_id,
+                    command,
+                    event_value,
+                    snapshot_value,
+                    result_value,
+                )
+                .map(|_| ())
+                .map_err(|error| match error {
+                    CoordinatorStoreError::PayloadTooLarge => PersistFailure::TooLarge,
+                    error => PersistFailure::Other(error.to_string()),
+                })
+        })
+        .await;
+        match persisted {
+            Ok(result) => result,
+            Err(error) => Err(PersistFailure::Other(format!(
+                "persistence task failed: {error}"
+            ))),
+        }
+    }
+
+    /// Drops the oldest finished runs (with their activities, attempts and
+    /// processes) beyond `keep_finished_runs`, and the oldest exited processes
+    /// beyond `keep_exited_processes`. Anything still in use is kept: live
+    /// processes, records an open FlowRun's tasks refer to, attempts with a
+    /// pending approval or tool request, and the records of `event`, whose
+    /// result is persisted with it. Returns whether anything was dropped.
+    fn prune_retained(
+        &mut self,
+        keep_finished_runs: usize,
+        keep_exited_processes: usize,
+        event: &CoordinatorEvent,
+    ) -> bool {
+        let mut used_runs = std::collections::HashSet::<String>::new();
+        let mut used_activities = std::collections::HashSet::<String>::new();
+        let mut used_attempts = std::collections::HashSet::<String>::new();
+        let mut used_processes = std::collections::HashSet::<String>::new();
+        used_runs.extend(event.run_id.clone());
+        used_activities.extend(event.activity_id.clone());
+        used_attempts.extend(event.attempt_id.clone());
+        used_processes.extend(event.process_id.clone());
+        for flow in self.flow_runs.values().filter(|flow| !flow.completed) {
+            for task in flow.tasks.values() {
+                used_runs.extend(task.supervisor_run_id.clone());
+                used_runs.extend(task.runtime_run_id.clone());
+                used_activities.extend(task.supervisor_activity_id.clone());
+                used_attempts.extend(task.attempt_id.clone());
+                used_processes.extend(task.process_id.clone());
+            }
+        }
+        for approval in self.approvals.values() {
+            if approval.state == ApprovalRequestState::Pending {
+                used_attempts.insert(approval.attempt_id.clone());
+            }
+        }
+        for request in self.tool_requests.values() {
+            if !request.state.terminal() {
+                used_attempts.insert(request.attempt_id.clone());
+            }
+        }
+        for process in self.processes.values().filter(|process| process.alive) {
+            used_runs.extend(process.run_id.clone());
+            used_attempts.extend(process.attempt_id.clone());
+        }
+        // A run is only as finished as its activities and attempts. Unknown
+        // counts as finished: it is what a restart leaves behind, and nothing
+        // can resume it once its processes are gone.
+        let finished_execution =
+            |status: ExecutionStatus| status.terminal() || status == ExecutionStatus::Unknown;
+        for attempt in self.attempts.values() {
+            if !finished_execution(attempt.status)
+                || used_attempts.contains(&attempt.attempt_id)
+                || used_activities.contains(&attempt.activity_id)
+            {
+                used_runs.insert(attempt.run_id.clone());
+            }
+        }
+        for activity in self.activities.values() {
+            if !(activity.status.terminal() || activity.status == ActivityStatus::Unknown)
+                || used_activities.contains(&activity.activity_id)
+            {
+                used_runs.insert(activity.run_id.clone());
+            }
+        }
+
+        let mut finished_runs = self
+            .runs
+            .values()
+            .filter(|run| finished_execution(run.status) && !used_runs.contains(&run.run_id))
+            .map(|run| (run.updated_at_ms, run.run_id.clone()))
+            .collect::<Vec<_>>();
+        finished_runs.sort_unstable_by(|left, right| right.cmp(left));
+        let dropped_runs = finished_runs
+            .into_iter()
+            .skip(keep_finished_runs)
+            .map(|(_, run_id)| run_id)
+            .collect::<std::collections::HashSet<_>>();
+        let mut pruned = !dropped_runs.is_empty();
+        if pruned {
+            self.runs.retain(|run_id, _| !dropped_runs.contains(run_id));
+            let dropped_activities = self
+                .activities
+                .values()
+                .filter(|activity| dropped_runs.contains(&activity.run_id))
+                .map(|activity| activity.activity_id.clone())
+                .collect::<Vec<_>>();
+            for activity_id in &dropped_activities {
+                self.activities.remove(activity_id);
+                self.latest_generation.remove(activity_id);
+                self.activity_contact_deadlines.remove(activity_id);
+                self.activity_timeouts.remove(activity_id);
+            }
+            self.attempts
+                .retain(|_, attempt| !dropped_runs.contains(&attempt.run_id));
+            self.processes.retain(|_, process| {
+                process.alive
+                    || !process
+                        .run_id
+                        .as_ref()
+                        .is_some_and(|run_id| dropped_runs.contains(run_id))
+            });
+        }
+
+        let mut exited = self
+            .processes
+            .values()
+            .filter(|process| !process.alive && !used_processes.contains(&process.process_id))
+            .map(|process| (process.updated_at_ms, process.process_id.clone()))
+            .collect::<Vec<_>>();
+        exited.sort_unstable_by(|left, right| right.cmp(left));
+        let dropped_processes = exited
+            .into_iter()
+            .skip(keep_exited_processes)
+            .map(|(_, process_id)| process_id)
+            .collect::<std::collections::HashSet<_>>();
+        if !dropped_processes.is_empty() {
+            pruned = true;
+            self.processes
+                .retain(|process_id, _| !dropped_processes.contains(process_id));
+            for attempt in self.attempts.values_mut() {
+                attempt
+                    .process_ids
+                    .retain(|process_id| !dropped_processes.contains(process_id));
+            }
+        }
+        pruned
     }
 
     fn replay(&self, epoch: &str, cursor: u64) -> CoordinatorReplay {
@@ -4678,11 +4876,124 @@ mod persistence_tests {
             Err(broadcast::error::TryRecvError::Empty)
         ));
 
+        // Later callers are told persistence failed, not that the loop closed.
         let later = handle
             .register_run_with_id("after-failure".into(), json!({}))
             .await;
-        assert!(matches!(later, Err(CoordinatorError::Closed)));
+        assert!(matches!(later, Err(CoordinatorError::Persistence)));
         assert_eq!(handle.snapshot().cursor, 0);
+    }
+
+    async fn finish_runs(handle: &CoordinatorHandle, count: usize, context: &Value) {
+        for index in 0..count {
+            let run = handle
+                .register_run_with_id(format!("register-{index}"), context.clone())
+                .await
+                .unwrap_or_else(|error| panic!("register run {index}: {error}"));
+            handle
+                .set_run_status(
+                    format!("finish-{index}"),
+                    run.run_id,
+                    ExecutionStatus::Succeeded,
+                )
+                .await
+                .unwrap_or_else(|error| panic!("finish run {index}: {error}"));
+        }
+    }
+
+    #[tokio::test]
+    async fn finished_runs_beyond_the_retention_cap_are_dropped() {
+        let handle = CoordinatorHandle::spawn("prune-runs");
+        let running = handle.register_run(json!({})).await.expect("running run");
+        finish_runs(&handle, MAX_RETAINED_FINISHED_RUNS + 50, &json!({})).await;
+
+        let snapshot = handle.snapshot();
+        let finished = snapshot
+            .runs
+            .iter()
+            .filter(|run| run.status.terminal())
+            .count();
+        // The cap, plus the run the last change finished: a change's own
+        // records are always kept.
+        assert_eq!(finished, MAX_RETAINED_FINISHED_RUNS + 1);
+        assert!(snapshot.runs.iter().any(|run| run.run_id == running.run_id));
+    }
+
+    #[tokio::test]
+    async fn a_change_that_would_overflow_the_snapshot_drops_finished_runs_and_is_persisted() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let journal = dir.path().join("coordinator-v1.jsonl");
+        let (store, recovered) = CoordinatorStore::open(&journal).expect("open store");
+        let handle = CoordinatorHandle::spawn_persistent("prune-overflow", store, recovered);
+        handle.wait_ready().await.expect("ready");
+        // 40 finished runs of ~110 KiB is ~4.3 MiB: under the retention cap,
+        // but over the store's 4 MiB snapshot bound.
+        finish_runs(&handle, 40, &json!({"payload":"x".repeat(110 * 1024)})).await;
+        let running = handle
+            .register_run_with_id("running".into(), json!({}))
+            .await
+            .expect("coordinator still accepts changes");
+        let snapshot = handle.snapshot();
+        assert!(snapshot.runs.len() < 41, "finished runs were dropped");
+        assert!(snapshot.runs.iter().any(|run| run.run_id == running.run_id));
+
+        // What was persisted restores.
+        drop(handle);
+        tokio::task::yield_now().await;
+        let (store, recovered) = CoordinatorStore::open(&journal).expect("reopen store");
+        let restored = CoordinatorHandle::spawn_persistent("prune-overflow-2", store, recovered);
+        restored.wait_ready().await.expect("restored");
+        assert!(restored
+            .snapshot()
+            .runs
+            .iter()
+            .any(|run| run.run_id == running.run_id));
+    }
+
+    #[tokio::test]
+    async fn exited_processes_are_bounded_and_live_ones_are_kept() {
+        let handle = CoordinatorHandle::spawn("prune-processes");
+        let run = handle.register_run(json!({})).await.expect("run");
+        let activity = handle
+            .register_activity(run.run_id.clone(), "worker".into())
+            .await
+            .expect("activity");
+        let attempt = handle
+            .register_attempt(activity.activity_id.clone())
+            .await
+            .expect("attempt");
+        let total = MAX_RETAINED_EXITED_PROCESSES + 40;
+        for index in 0..total {
+            handle
+                .associate_process(
+                    format!("process-{index}"),
+                    Some(attempt.attempt_id.clone()),
+                    Some(attempt.generation),
+                )
+                .await
+                .expect("associate process");
+            if index + 1 < total {
+                handle
+                    .process_exited(format!("process-{index}"), "exited".into())
+                    .await
+                    .expect("process exited");
+            }
+        }
+
+        let snapshot = handle.snapshot();
+        let exited = snapshot.processes.iter().filter(|p| !p.alive).count();
+        assert_eq!(exited, MAX_RETAINED_EXITED_PROCESSES);
+        let live = format!("process-{}", total - 1);
+        assert!(snapshot
+            .processes
+            .iter()
+            .any(|process| process.alive && process.process_id == live));
+        // The run with a live process is kept, and the attempt no longer
+        // lists processes that were dropped.
+        assert!(snapshot.runs.iter().any(|r| r.run_id == run.run_id));
+        let kept = &snapshot.attempts[0].process_ids;
+        assert_eq!(kept.len(), MAX_RETAINED_EXITED_PROCESSES + 1);
+        assert!(kept.contains(&live));
     }
 
     #[tokio::test]
